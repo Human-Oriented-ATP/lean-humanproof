@@ -11,6 +11,7 @@ inductive Box : Type where
 | and (name : Name) (type : Expr) (value body : Box)
 | or (inl : Box) (inr : Box)
 -- | letB (name : Name) (type value : Expr) (body : Box)
+deriving Inhabited
 
 namespace Box
 
@@ -34,8 +35,6 @@ def getResults : Box → Array Expr
 inductive Coord where
   | forallB | metaVar | andL | andR | orL | orR
   deriving Repr
-
-abbrev Address := List Coord
 
 inductive PathItem where
   | forallB (name : Name) (type : Expr)
@@ -70,6 +69,11 @@ def Zipper.up (zipper : Zipper) : Option Zipper := do
   | .orL inr => return { zipper with cursor := .or cursor inr }
   | .orR inl => return { zipper with cursor := .or inl cursor }
 
+partial def Zipper.zip (zipper : Zipper) : Box :=
+  if let some zipper := zipper.up then
+    zipper.zip
+  else
+    zipper.cursor
 
 def Zipper.down (zipper : Zipper) (coord : Coord) : MetaM Zipper := do
   let { path, cursor, vars, lctx, localInstances, mctx ..} := zipper
@@ -97,6 +101,20 @@ def Zipper.down (zipper : Zipper) (coord : Coord) : MetaM Zipper := do
   | .orL    , .or inl inr => return { zipper with path := .orL inr :: path, cursor := inl }
   | .orR    , .or inl inr => return { zipper with path := .orR inl :: path, cursor := inr }
   | _       , _ => throwError "Zipper down coordinate is wrong: {repr coord}"
+
+
+def Zipper.unzip (box : Box) (address : List Coord) : MetaM Zipper := do
+  go { path := [], cursor := box, vars := #[], lctx := {}, localInstances := {}, mctx := {} } address
+where
+  go (zipper : Zipper) (address : List Coord) : MetaM Zipper := do
+    let coord :: address := address | return zipper
+    let zipper ← zipper.down coord
+    go zipper address
+
+
+
+
+
 
 
 end Box
