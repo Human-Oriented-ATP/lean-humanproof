@@ -10,3 +10,5 @@ lean_lib «HumanProof» where
 @[default_target]
 lean_exe «humanproof» where
   root := `«HumanProof»
+
+require "leanprover-community" / "mathlib"
