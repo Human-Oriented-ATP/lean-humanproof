@@ -118,10 +118,6 @@ example (h : 1 + 1 = 2) (g : False) (hh : h = h) : True := by
 (1) define addMVar and assign mvar.
   - define/find metavariable dependency relation.
   -
-(2) DONE -- collectDelayMVarApps : Expr → MetaM (HashSet MVarId × HashMap MvarId (Array Expr))
-
-(3) DONE -- Box.instantiate1 : Expr → Expr → Expr. Actually just instantiate mvars. Except for delay assigned mvars, because with will deal with those using And binders.
-
 
 -/
 
@@ -130,33 +126,130 @@ def instantiateMVarWith (var e new : Expr) : CoreM Expr :=
   Core.transform e (post := (if · == var then return .done new else return .continue))
 
 
+
+structure CleanUpTacticState where
+  newMVars : Std.HashMap MVarId (List Coord)
+  newHaves : Array (LocalDecl × Expr × List Coord)
+  /--
+  For a delayed assigned metavariable`?m : ∀ (a₁ : α₁) .. (aₙ : αₙ), β`,
+  with `n` arguments that have been added to `newHaves`, we replace each occurrence of `?m` with
+  `fun (_a₁ : α₁) .. (_aₙ : αₙ) => x`, where `x` is the delayed assignment.
+  We cache this replacement.
+  -/
+  delayedReplacements : Std.HashMap MVarId Expr
+
+
 /--
-Collect the metavariables that appear in an expression.
-This is used after running a tactic, on the metavariable goal.
+Collect the metavariables that appear in a goal after a tactic has been run, which modified the
+metavariable context.
 -/
-def collectDelayMVarApps (mvarId : MVarId) : MetaM (Std.HashSet MVarId × Std.HashMap MVarId (Array Expr)) := do
+def traverseAssignedMVarId (mvarId : MVarId) : MetaM (Expr × Std.HashSet MVarId × Array (LocalDecl × Expr)) := mvarId.withContext do
   let e ← instantiateMVars (.mvar mvarId)
-  let (_, res) ← StateT.run (s := ({}, {})) <| Core.transform e (pre := fun e => do
-    if let .mvar mvarId := e then
-      let s : Std.HashSet MVarId × Std.HashMap MVarId (Array Expr) ← get
-      if ← mvarId.isDelayedAssigned then
-        let args := e.getAppArgs
-        if !s.2.contains mvarId then
-          set (s.1, s.2.insert mvarId args)
+  let (e, (_, s)) ← StateT.run (σ := Std.HashMap MVarId (Expr) × Std.HashSet MVarId × Array (LocalDecl × Expr))
+      (s := ({}, {}, #[])) <| Core.transform e (pre := fun e => do
+    if let .mvar mvarId := e.getAppFn then (do
+      if (← get).2.1.contains mvarId then
+        if let some replacement := (← get).1[mvarId]? then
+          return .continue (replacement.beta e.getAppArgs)
+        else
+          return .continue
+      if let some delayAssignment ← getDelayedMVarAssignment? mvarId then
+        let mvarIdPending := delayAssignment.mvarIdPending
+        mvarIdPending.withContext do
+          let nargs := delayAssignment.fvars.size
+          let allArgs := e.getAppArgs
+          let mut args : Array (LocalDecl × Expr) := #[]
+          for arg in allArgs[:nargs], fvar in delayAssignment.fvars do
+            if arg.isFVar then
+              continue
+            if arg.hasLooseBVars then
+              throwError "LALALA this isn't supported yet :("
+            args := args.push (← getFVarLocalDecl fvar, arg)
+          modify fun (a, b, c) => (a, b, c ++ args)
+          let replacement := (← mvarIdPending.getDecl).lctx.mkLambda delayAssignment.fvars (← instantiateMVars (.mvar delayAssignment.mvarIdPending))
+          return .continue (replacement.beta allArgs)
       else
-        set (s.1.insert mvarId, s.2)
-    return .continue)
-  return res
-#check collectMVars
-#check Tactic.getU
-#check MetavarContext.collectForwardDeps
+        modify fun (a, b, c) => (a, b.insert mvarId, c)
+        return .continue)
+    else
+      return .continue)
+  return (e, s)
 
-#check Core.transform
 
-#check Lean.Expr.instantiate1
+/-
+TODO:
+
+- for a new have binder, find the prefix of the path for its location
+
+- for new metavariables, find the location/address by intersecting the addresses.
+
+- while traversing the metavariables assignments, replace delayed assigned metavariables.
+
+-/
+
+section RunTactic
+
+open Elab Tactic
+
+
+
+def runTactic (box : Box) (address : List Coord) (tac : TacticM Unit) : MetaM Box := do
+  sorry
+
+end RunTactic
+
+
+section Elab
+
+structure State where
+  box       : Box
+  goals     : Array MVarId
+  addresses : Std.HashMap MVarId (List Coord)
+
+open Elab Parser Tactic
+
+declare_syntax_cat box_tactic
+
+@[inline] def boxTacticParser (rbp : Nat := 0) : Parser :=
+  categoryParser `box_tactic rbp
+
+def boxTacticSeq1Indented : Parser := leading_parser
+  sepBy1IndentSemicolon boxTacticParser
+
+def boxTacticSeqBracketed : Parser := leading_parser
+  "{" >> sepByIndentSemicolon boxTacticParser >> ppDedent (ppLine >> "}")
+
+def boxTacticSeq := leading_parser
+  boxTacticSeqBracketed <|> boxTacticSeq1Indented
+
+syntax (name := lean_tactic) tactic : box_tactic
+
+def evalBoxTactic (stx : Syntax) (box : Box) (address : List Coord) : MetaM Box := do
+  match stx with
+  | `(box_tactic| $tac:tactic) => runTactic box (evalTactic tac)
+  | _ => throwUnsupportedSyntax
+
+-- @[incremental]
+-- def evalBoxTacticSeq : Tactic :=
+--   Term.withNarrowedArgTacticReuse (argIdx := 0) evalBoxTactic
+
+
+
+
+#check evalTactic
+#check evalTacticSeq
+
+
+end Elab
+
+
 end Box
 
 end HumanProof
+
+
+
+
 /-
 ?a : Nat
 h : ?a = 1
