@@ -4,6 +4,27 @@ namespace HumanProof
 
 open Lean Meta
 
+syntax:10 term:10 "%." noWs ident term:max : term
+
+macro_rules
+| `($struct %.$field:ident $f) => `({ $struct with $field:ident := $f $struct.$field })
+
+syntax ident ":=." noWs ident term : doElem
+
+macro_rules
+| `(doElem| $var:ident :=.$field:ident $f) => `(doElem| $var:ident := $var %.$field $f)
+
+/-- test -/
+syntax ident ":>" term : doElem
+
+macro_rules
+| `(doElem| $var:ident :> $f) => `(doElem| $var:ident := $f $var)
+
+syntax ident ":->" term : doElem
+
+macro_rules
+| `(doElem| $var:ident :-> $f:term) => `(doElem| $var:ident ← $f:term $var)
+
 inductive Box where
 | forallB (decl : LocalDecl) (body : Box) (hidden : Bool := false)
 | metaVar (mvarId : MVarId) (name : Name) (type : Expr) (body : Box)
@@ -64,6 +85,16 @@ instance : BEq PathItem where
     | .orR .., .orR ..
     | .haveB .., .haveB .. => true
     | _, _ => false
+
+instance : Hashable PathItem where
+  hash
+    | .forallB .. => 0
+    | .metaVar .. => 1
+    | .andL ..    => 2
+    | .andR ..    => 3
+    | .orL ..     => 4
+    | .orR ..     => 5
+    | .haveB ..   => 6
 
 def PathItem.getLocalDecl? : PathItem → Option LocalDecl
 | .forallB decl _ | andR decl _ | haveB decl _ => decl
@@ -195,7 +226,7 @@ def minimalAddressFor (decl : LocalDecl) (value : Expr) (address : List PathItem
 structure CleanUpTacticState where
   newMVars      : Std.HashMap MVarId (List PathItem)
   newHaves      : Array (LocalDecl × Expr × List PathItem)
-  -- assignedMVars : Array MVarId
+  assignedMVars : Array MVarId
   -- /--
   -- For a delayed assigned metavariable`?m : ∀ (a₁ : α₁) .. (aₙ : αₙ), β`,
   -- with `n` arguments that have been added to `newHaves`, we replace each occurrence of `?m` with
@@ -204,6 +235,82 @@ structure CleanUpTacticState where
   -- -/
   -- delayedReplacements : Std.HashMap MVarId Expr
 
+/-- The addresses in this structure are stored in reverse order. -/
+structure UpdateBoxContext where
+  removeMVar : Std.HashMap (List PathItem) (Array MVarId) := {}  -- no need to store the `mvarId` here. We do it just for sanity
+  newMVars   : Std.HashMap (List PathItem) (Array MVarId) := {}
+  newHaves   : Std.HashMap (List PathItem) (Array (LocalDecl × Expr)) := {}
+  address    : List PathItem := []
+
+def withPathItem {α m} [Monad m] [MonadWithReader UpdateBoxContext m] (item : PathItem) : m α → m α :=
+  withReader (· %.address (item :: ·))
+
+def _root_.Std.HashMap.insertInArray {α} {β} [BEq α] [Hashable α] (m : Std.HashMap α (Array β)) (a : α) (b : β) : Std.HashMap α (Array β) :=
+  m.alter a fun
+    | none => #[b]
+    | some arr => arr.push b
+
+def CleanUpTacticState.toUpdateBoxContext (addresses : Std.HashMap MVarId (List PathItem)) : CleanUpTacticState → MetaM UpdateBoxContext
+  | { newMVars, newHaves, assignedMVars } => do
+    let mut ctx := {}
+    for mvarId in assignedMVars do
+      let some address := addresses[mvarId]? | throwError "QWERTY No Address available for {mvarId}"
+      ctx :=.removeMVar (·.insertInArray address.reverse mvarId)
+    for (decl, value, address) in newHaves do
+      ctx :=.newHaves (·.insertInArray address.reverse (decl, value))
+    for (mvarId, address) in newMVars do
+      ctx :=.newMVars (·.insertInArray address.reverse mvarId)
+    return ctx
+
+nonrec def _root_.Lean.LocalDecl.instantiateMVars : LocalDecl → MetaM LocalDecl
+  | .cdecl index fvarId userName type bi kind           => return .cdecl index fvarId userName (← instantiateMVars type) bi kind
+  | .ldecl index fvarId userName type value nonDep kind => return .ldecl index fvarId userName (← instantiateMVars type) (← instantiateMVars value) nonDep kind
+
+
+def updateBox (box : Box) (addresses : Std.HashMap MVarId (List PathItem)) (state : CleanUpTacticState) : MetaM Box := do
+  go box |>.run (← state.toUpdateBoxContext addresses)
+where
+  go (box : Box) : ReaderT UpdateBoxContext MetaM Box := do
+    let mut box : Box ← (do match box with
+      | .forallB decl body hidden =>
+        let decl ← decl.instantiateMVars
+        let body ← withPathItem (.forallB decl hidden) <| go body
+        return .forallB decl body hidden
+      | .metaVar mvarId name type body =>
+        let type ← instantiateMVars type
+        let body ← withPathItem (.metaVar mvarId name type) <| go body
+        return .metaVar mvarId name type body
+      | .result r => return .result (← instantiateMVars r)
+      | .and decl value body =>
+        let decl ← decl.instantiateMVars
+        let value ← withPathItem (.andL decl body) <| go value
+        let body ← withPathItem (.andR decl value) <| go body
+        return .and decl value body
+      | .or inl inr =>
+        let inl ← withPathItem (.orL inr) <| go inl
+        let inr ← withPathItem (.orR inl) <| go inr
+        return .or inl inr
+      | .haveB decl value body =>
+        let decl ← decl.instantiateMVars
+        let value ← instantiateMVars value
+        let body ← withPathItem (.haveB decl value) <| go body
+        return .haveB decl value body)
+
+    let { removeMVar, newMVars, newHaves, address } ← read
+    if let some mvarIds := removeMVar[address]? then
+      let #[mvarId] := mvarIds | throwError "Didn't get 1 mvarId: {mvarIds}"
+      let .metaVar mvarId' _ _ body := box | throwError "Expected a metavar goal"
+      unless mvarId' == mvarId do throwError "metavar MVarId doesn't match: {mvarId} ≠ {mvarId'}"
+      box := body
+    if let some mvarIds := newMVars[address]? then
+      -- need to ensure `mvarId`s are in the right order (we don't care right now)
+      for mvarId in mvarIds do
+        let { userName, type, .. } ← mvarId.getDecl
+        box := .metaVar mvarId userName type box
+    if let some haves := newHaves[address]? then
+      for (decl, value) in haves do
+        box := .haveB decl value box
+    return box
 
 /--
 Collect the metavariables that appear in a goal after a tactic has been run, which modified the
@@ -214,7 +321,7 @@ def traverseAssignedMVarIds (addresses : Std.HashMap MVarId (List PathItem)) : S
   for mvarId in goals do
     let some address := addresses[mvarId]? | throwError "NANANA incomplete addresses"
     if ← mvarId.isAssigned then
-      -- modify fun s => { s with assignedMVars := s.assignedMVars.push mvarId }
+      modify fun s => { s with assignedMVars := s.assignedMVars.push mvarId }
       mvarId.withContext do
       let e ← instantiateMVars (.mvar mvarId)
       let newE ← Core.transform e (pre := fun e => do
@@ -306,12 +413,6 @@ def evalBoxTactic (stx : Syntax) (box : Box) (address : List Coord) : MetaM Box 
 -- @[incremental]
 -- def evalBoxTacticSeq : Tactic :=
 --   Term.withNarrowedArgTacticReuse (argIdx := 0) evalBoxTactic
-
-
-
-
-#check evalTactic
-#check evalTacticSeq
 
 
 end Elab
