@@ -4,9 +4,9 @@ namespace HumanProof
 
 open Lean Meta
 
-inductive Box : Type where
+inductive Box where
 | forallB (decl : LocalDecl) (body : Box) (hidden : Bool := false)
-| metaVar (mvarId : MVarId) (decl : MetavarDecl) (body : Box)
+| metaVar (mvarId : MVarId) (name : Name) (type : Expr) (body : Box)
 | result (r : Expr)
 | and (decl : LocalDecl) (value body : Box)
 | or (inl : Box) (inr : Box)
@@ -34,16 +34,40 @@ namespace Box
 
 inductive Coord where
   | forallB | metaVar | andL | andR | orL | orR | haveB
-  deriving Repr
+  deriving Repr, BEq
 
 inductive PathItem where
   | forallB (decl : LocalDecl) (hidden : Bool)
-  | metaVar (mvarId : MVarId) (decl : MetavarDecl)
+  | metaVar (mvarId : MVarId) (name : Name) (type : Expr)
   | andL (decl : LocalDecl) (body : Box)
   | andR (decl : LocalDecl) (value : Box)
   | orL (inr : Box)
   | orR (inl : Box)
   | haveB (decl : LocalDecl) (value : Expr)
+
+def PathItem.format : PathItem → MessageData
+  | forallB (decl : LocalDecl) (_hidden : Bool) => m!"forallB {decl.type}"
+  | metaVar (_mvarId : MVarId) (_name : Name) (type : Expr) => m!"metaVar {type}"
+  | andL (_decl : LocalDecl) (_body : Box) => m!"andL"
+  | andR (decl : LocalDecl) (_value : Box) => m!"andR {decl.type}"
+  | orL (_inr : Box) => m!"orL"
+  | orR (_inl : Box) => m!"orR"
+  | haveB (decl : LocalDecl) (value : Expr) => m!"haveB {decl.type}, value: {value}"
+
+instance : BEq PathItem where
+  beq
+    | .forallB .., .forallB ..
+    | .metaVar .., .metaVar ..
+    | .andL .., .andL ..
+    | .andR .., .andR ..
+    | .orL .., .orL ..
+    | .orR .., .orR ..
+    | .haveB .., .haveB .. => true
+    | _, _ => false
+
+def PathItem.getLocalDecl? : PathItem → Option LocalDecl
+| .forallB decl _ | andR decl _ | haveB decl _ => decl
+| _ => none
 
 structure Zipper where
   path           : List PathItem
@@ -61,7 +85,7 @@ def Zipper.up (zipper : Zipper) : Option Zipper := do
     return { zipper with
       cursor := .forallB decl cursor hidden
       lctx   := zipper.lctx.erase decl.fvarId  }
-  | .metaVar mvarId decl => return { zipper with cursor := .metaVar mvarId decl cursor }
+  | .metaVar mvarId name type => return { zipper with cursor := .metaVar mvarId name type cursor }
   | .andL decl body => return { zipper with cursor := .and decl cursor body }
   | .andR decl value => return { zipper with cursor := .and decl value cursor }
   | .orL inr => return { zipper with cursor := .or cursor inr }
@@ -86,12 +110,12 @@ def Zipper.down (zipper : Zipper) (coord : Coord) : MetaM Zipper := do
           localInstances := ← getLocalInstances }
   match coord, cursor with
   | .forallB, .forallB decl body hidden => withFVar decl (.forallB decl hidden) body
-  | .metaVar, .metaVar mvarId decl body =>
-    let {userName, lctx, type, localInstances, kind, .. } := decl
+  | .metaVar, .metaVar mvarId name type body =>
+    -- let { userName, lctx, type, localInstances, kind, .. } := decl
     return { zipper with
-      path := .metaVar mvarId decl :: path
+      path := .metaVar mvarId name type :: path
       cursor := body
-      mctx := mctx.addExprMVarDeclExp mvarId userName lctx localInstances type kind }
+      mctx := mctx.addExprMVarDeclExp mvarId name lctx localInstances type (kind := .syntheticOpaque) }
   | .andL   , .and decl value body => return { zipper with path := .andL decl body :: path, cursor := value }
   | .andR   , .and decl value body => withFVar decl (.andR decl value) body
   | .orL    , .or inl inr => return { zipper with path := .orL inr :: path, cursor := inl }
@@ -109,71 +133,121 @@ where
     go zipper address
 
 
-
-example (h : 1 + 1 = 2) (g : False) (hh : h = h) : True := by
-  change 2 = 2 at  h
-  simp at h
-
-/-
-(1) define addMVar and assign mvar.
-  - define/find metavariable dependency relation.
-  -
-
--/
-
 /-- Replace all occurrences of a variable with `new`. -/
 def instantiateMVarWith (var e new : Expr) : CoreM Expr :=
   Core.transform e (post := (if · == var then return .done new else return .continue))
 
+open Elab Tactic
+
+def refreshIds (box : Box) : MetaM Box := sorry
+
+def createTacticState (box : Box) : TacticM (Std.HashMap MVarId (List PathItem)) := do
+  setGoals []
+  setMCtx {}
+  let (_, s) ← withLCtx {} {} <| ((go box).run []).run {}
+  return s
+where
+  go : Box → (ReaderT (List PathItem) <| StateT (Std.HashMap MVarId (List PathItem)) TacticM) Unit
+  | forallB decl body hidden =>
+    withReader (.forallB decl hidden :: ·) do
+      if hidden then go body else withExistingLocalDecls [decl] do go body
+  | metaVar mvarId name type body =>
+    withReader (.metaVar mvarId name type :: ·) do
+      modifyMCtx (·.addExprMVarDeclExp mvarId name (← getLCtx) (← getLocalInstances) type (kind := .syntheticOpaque))
+      pushGoal mvarId
+      let address := (← read).reverse
+      modify (·.insert mvarId address)
+      go body
+  | result _ => return
+  | and decl value body => do
+    withReader (.andL decl body :: ·) do go value
+    withReader (.andR decl body :: ·) do withExistingLocalDecls [decl] do go body
+  | or inl inr => do
+    -- We should think about how to name the goals so that it helps the user.
+    withReader (.orL inr :: ·) do go inl
+    withReader (.orR inl :: ·) do go inr
+  | haveB decl value body => do
+    withReader (.haveB decl value :: ·) do withExistingLocalDecls [decl] do go body
+
+
+def _root_.List.commonPrefix {α} [BEq α] (as bs : List α) : List α :=
+  match as, bs with
+  | a :: as, b :: bs => if a == b then a :: (as.commonPrefix bs) else []
+  | _, _ => []
+
+def minimalAddressFor (decl : LocalDecl) (value : Expr) (address : List PathItem) : MetaM (List PathItem) := do
+  let type ← instantiateMVars decl.type
+  let value ← instantiateMVars value
+  let fvars := collectFVars {} type
+  let fvars := collectFVars fvars value
+  if fvars.fvarSet.isEmpty then return []
+  let mut remainingFVars := fvars.fvarSet
+  let mut addressArr := #[]
+  for item in address do
+    addressArr := addressArr.push item
+    if let some decl := item.getLocalDecl? then
+      remainingFVars := remainingFVars.erase decl.fvarId
+      if remainingFVars.isEmpty then
+        return addressArr.toList
+  throwError "CACKLE CACKLE CACKLE can't bind {value} : {type} in path {address.map (·.format)}"
 
 
 structure CleanUpTacticState where
-  newMVars : Std.HashMap MVarId (List Coord)
-  newHaves : Array (LocalDecl × Expr × List Coord)
-  /--
-  For a delayed assigned metavariable`?m : ∀ (a₁ : α₁) .. (aₙ : αₙ), β`,
-  with `n` arguments that have been added to `newHaves`, we replace each occurrence of `?m` with
-  `fun (_a₁ : α₁) .. (_aₙ : αₙ) => x`, where `x` is the delayed assignment.
-  We cache this replacement.
-  -/
-  delayedReplacements : Std.HashMap MVarId Expr
+  newMVars      : Std.HashMap MVarId (List PathItem)
+  newHaves      : Array (LocalDecl × Expr × List PathItem)
+  -- assignedMVars : Array MVarId
+  -- /--
+  -- For a delayed assigned metavariable`?m : ∀ (a₁ : α₁) .. (aₙ : αₙ), β`,
+  -- with `n` arguments that have been added to `newHaves`, we replace each occurrence of `?m` with
+  -- `fun (_a₁ : α₁) .. (_aₙ : αₙ) => x`, where `x` is the delayed assignment.
+  -- We cache this replacement.
+  -- -/
+  -- delayedReplacements : Std.HashMap MVarId Expr
 
 
 /--
 Collect the metavariables that appear in a goal after a tactic has been run, which modified the
 metavariable context.
 -/
-def traverseAssignedMVarId (mvarId : MVarId) : MetaM (Expr × Std.HashSet MVarId × Array (LocalDecl × Expr)) := mvarId.withContext do
-  let e ← instantiateMVars (.mvar mvarId)
-  let (e, (_, s)) ← StateT.run (σ := Std.HashMap MVarId (Expr) × Std.HashSet MVarId × Array (LocalDecl × Expr))
-      (s := ({}, {}, #[])) <| Core.transform e (pre := fun e => do
-    if let .mvar mvarId := e.getAppFn then (do
-      if (← get).2.1.contains mvarId then
-        if let some replacement := (← get).1[mvarId]? then
-          return .continue (replacement.beta e.getAppArgs)
+def traverseAssignedMVarIds (addresses : Std.HashMap MVarId (List PathItem)) : StateT CleanUpTacticState TacticM Unit := do
+  let goals ← getGoals
+  for mvarId in goals do
+    let some address := addresses[mvarId]? | throwError "NANANA incomplete addresses"
+    if ← mvarId.isAssigned then
+      -- modify fun s => { s with assignedMVars := s.assignedMVars.push mvarId }
+      mvarId.withContext do
+      let e ← instantiateMVars (.mvar mvarId)
+      let newE ← Core.transform e (pre := fun e => do
+        if let .mvar mvarId := e.getAppFn then
+          if let some address' := (← get).newMVars[mvarId]? then
+            let address' := address'.commonPrefix address
+            modify fun s => { s with newMVars := s.newMVars.insert mvarId address' }
+            return .continue (← instantiateMVars e)
+          if let some { mvarIdPending, fvars } ← getDelayedMVarAssignment? mvarId then
+            mvarIdPending.withContext do
+              let allArgs := e.getAppArgs
+              if allArgs.size < fvars.size then
+                throwError "HOHOHO this isn't supported yet :("
+              let mut args : Array (LocalDecl × Expr) := #[]
+              for arg in allArgs, fvar in fvars do
+                if arg.isFVar then
+                  continue
+                if arg.hasLooseBVars then
+                  throwError "LALALA this isn't supported yet :("
+                let fvarDecl ← getFVarLocalDecl fvar
+                let shortenedPath ← minimalAddressFor fvarDecl arg address
+                modify fun s => { s with newHaves := s.newHaves.push (fvarDecl, arg, shortenedPath) }
+                args := args.push (← getFVarLocalDecl fvar, arg)
+              let replacement := (← mvarIdPending.getDecl).lctx.mkLambda fvars (← instantiateMVars (.mvar mvarIdPending))
+              mvarId.assign replacement
+              return .continue (← instantiateMVars e)
+          else
+            modify fun s => { s with newMVars := s.newMVars.insert mvarId address }
+            return .continue
         else
-          return .continue
-      if let some delayAssignment ← getDelayedMVarAssignment? mvarId then
-        let mvarIdPending := delayAssignment.mvarIdPending
-        mvarIdPending.withContext do
-          let nargs := delayAssignment.fvars.size
-          let allArgs := e.getAppArgs
-          let mut args : Array (LocalDecl × Expr) := #[]
-          for arg in allArgs[:nargs], fvar in delayAssignment.fvars do
-            if arg.isFVar then
-              continue
-            if arg.hasLooseBVars then
-              throwError "LALALA this isn't supported yet :("
-            args := args.push (← getFVarLocalDecl fvar, arg)
-          modify fun (a, b, c) => (a, b, c ++ args)
-          let replacement := (← mvarIdPending.getDecl).lctx.mkLambda delayAssignment.fvars (← instantiateMVars (.mvar delayAssignment.mvarIdPending))
-          return .continue (replacement.beta allArgs)
-      else
-        modify fun (a, b, c) => (a, b.insert mvarId, c)
-        return .continue)
-    else
-      return .continue)
-  return (e, s)
+          return .continue)
+      mvarId.assign newE
+
 
 
 /-
