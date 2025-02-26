@@ -25,6 +25,21 @@ syntax ident ":->" term : doElem
 macro_rules
 | `(doElem| $var:ident :-> $f:term) => `(doElem| $var:ident ← $f:term $var)
 
+
+
+
+/-
+
+TODO: simplifications in Box
+
+- remove metaVar binders when they aren't used
+- Propagate solved boxes in `.forallB`, `.haveB`, `or` (either side), `.and` (value)
+- Reduce `.and` (body):
+  - `let x := box; ▸ x` ↦ `box`
+  - `let x := (let y := box; ▸ g y); ▸ f x` ↦ `let y := box; ▸ f (g y)`
+
+-/
+
 inductive Box where
 | forallB (decl : LocalDecl) (body : Box) (hidden : Bool := false)
 | metaVar (mvarId : MVarId) (name : Name) (type : Expr) (body : Box)
@@ -36,22 +51,39 @@ deriving Inhabited
 
 namespace Box
 
--- def getResults : Box → Array Expr
---   | .forallB name type body =>
---     (getResults body).map (.forallE name type · .default)
---   | metaVar _ _ body =>
---     (getResults body).filterMap fun e =>
---       if e.hasLooseBVar 0 then
---         none
---       else
---         some (e.lowerLooseBVars 1 1)
---   | .result r => #[r]
---   | .and name type inl inr =>
---     (getResults inl).flatMap fun e =>
---       (getResults inr).map (mkLet name type e ·)
---   | .or inl inr =>
---     getResults inl ++ getResults inr
+def _root_.Lean.LocalDecl.mkLambda (decl : LocalDecl) (e : Expr) : Expr :=
+  let e := e.abstract #[decl.toExpr]
+  .lam decl.userName decl.type e decl.binderInfo
 
+def _root_.Lean.LocalDecl.mkLet (decl : LocalDecl) (e value : Expr) : Expr :=
+  let e := e.abstract #[decl.toExpr]
+  Lean.mkLet decl.userName decl.type value e
+
+def getResults (box : Box) : MetaM (Array Expr) := do
+  return (← go box).filter (!·.hasMVar)
+where
+  go : Box → MetaM (Array Expr)
+  | .forallB decl body _hidden =>
+    withExistingLocalDecls [decl] do
+    if !decl.type.hasMVar then
+      return (← go body).map decl.mkLambda
+    else
+      return #[]
+  | .metaVar _ _ _ body => go body
+  | .result r => if r.hasMVar then return #[] else return #[r]
+  | .and decl value body => do
+    (← go value).flatMapM fun value => withExistingLocalDecls [decl] do
+      return (← go body).map (decl.mkLet · value)
+  | .or inl inr => return (← go inl) ++ (← go inr)
+  | .haveB decl value body => withExistingLocalDecls [decl] do
+    (← go body).mapM fun e => do
+      let f := decl.mkLambda e
+      let ety ← inferType e
+      let α ← inferType value
+      let β := decl.mkLambda ety
+      let u1 ← getLevel α
+      let u2 ← getLevel ety
+      return mkAppN (.const ``letFun [u1, u2]) #[α, β, value, f]
 
 inductive Coord where
   | forallB | metaVar | andL | andR | orL | orR | haveB
