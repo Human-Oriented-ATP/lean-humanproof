@@ -409,8 +409,6 @@ section RunTactic
 
 open Elab Parser Tactic
 
-initialize boxRef : IO.Ref Box ← IO.mkRef (Box.result <| mkApp2 (mkConst ``sorryAx) (mkConst ``True) (mkConst ``Bool.true))
-
 declare_syntax_cat box_tactic
 syntax (name := lean_tactic) tactic : box_tactic
 
@@ -443,13 +441,6 @@ def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
     box := .forallB decl box
   return (lctxArr.map LocalDecl.toExpr, box)
 
-def initializeProofBox : TacticM (Array Expr) := do
-  if (← getGoals).length > 1 then
-    logWarning "Box proofs are meant to be initialized when there is just one goal."
-  let (lctxArr, box) ← createProofBox (← getMainGoal)
-  boxRef.set box
-  return lctxArr
-
 def _root_.Lean.Tactic.logTacticState : TacticM Unit := do
   for goal in (← getGoals) do
     logInfo goal
@@ -464,27 +455,39 @@ def boxProofElab : Tactic
     let mainGoal ← getMainGoal
     let mctx ← getMCtx
 
-    let lctxArr ← initializeProofBox
+    if (← getGoals).length > 1 then
+      logWarning "Box proofs are meant to be initialized when there is just one goal."
+
+    let (lctxArr, box) ← createProofBox (← getMainGoal)
+    let mut box := box
+
     logTacticStateAt start
 
     for tactic in seq.getElems do
-      let box ← boxRef.get
       let addresses ← createTacticState box
       evalBoxTactic tactic
       logTacticStateAt tactic
-      let newBox ← updateBox box addresses
-      boxRef.set newBox
-      let results ← newBox.getResults
+      box ← updateBox box addresses
+      let results ← box.getResults
       if h:(0 < results.size) then do
         let proof := results[0]
-        -- withMCtx mctx do
-        let proof := mkAppN proof lctxArr
-
-        discard <| isDefEq (.mvar mainGoal) proof
+        withMCtx mctx do
+          let proof := mkAppN proof lctxArr
+          unless ← isDefEq (.mvar mainGoal) proof do
+            throwError "The proof doesn't match the goal"
         return ()
   | _ => throwUnsupportedSyntax
 
 end RunTactic
+
+section Test
+
+example (h : 3 = 2 + 1) : (2 + 1) = 3 := by
+  box_proof
+    rw [← h]
+    exact True.intro
+
+end Test
 
 section Elab
 
