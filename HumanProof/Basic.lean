@@ -432,11 +432,10 @@ def evalBoxTactic (stx : TSyntax `box_tactic) : TacticM Unit := do
 syntax (name := box_proof) "box_proof" ppLine boxTacticSeq : tactic
 
 def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
-  -- is it wise to use the same `mvarId` here? Am I better off creating a fresh one?
-  -- Jovan's opinion: maybe use a new one
-  let mut box : Box := .metaVar mvarId (← mvarId.getTag) (← mvarId.getType) (.result <| .mvar mvarId)
-  let lctxArr := (← mvarId.getDecl).lctx.decls.toArray.filterMap id
-  -- let localInstances := decl.localInstances -- probably don't need these, the relevant information is likely to already be in the `lctx`
+  let { userName, type, kind, .. } ← mvarId.getDecl
+  let mvar' ← mkFreshExprMVar type kind userName
+  let mut box : Box := .metaVar mvar'.mvarId! userName type (.result mvar')
+  let lctxArr := (← mvarId.getDecl).lctx.decls.toArray.filterMap id |>.filter (!·.isAuxDecl)
   for decl in lctxArr.reverse do -- reversing to add in the right order
     box := .forallB decl box
   return (lctxArr.map LocalDecl.toExpr, box)
@@ -452,13 +451,13 @@ def _root_.Lean.Tactic.logTacticStateAt (stx : Syntax) : TacticM Unit := do
 @[incremental, tactic box_proof]
 def boxProofElab : Tactic
   | `(tactic| box_proof%$start $seq*) => do
-    let mainGoal ← getMainGoal
-    let mctx ← getMCtx
-
     if (← getGoals).length > 1 then
       logWarning "Box proofs are meant to be initialized when there is just one goal."
 
-    let (lctxArr, box) ← createProofBox (← getMainGoal)
+    let mainGoal ← getMainGoal
+    let mctx ← getMCtx
+
+    let (lctxArr, box) ← createProofBox mainGoal
     let mut box := box
 
     logTacticStateAt start
@@ -468,14 +467,15 @@ def boxProofElab : Tactic
       evalBoxTactic tactic
       logTacticStateAt tactic
       box ← updateBox box addresses
+
       let results ← box.getResults
-      if h:(0 < results.size) then do
+      if h : 0 < results.size then do
         let proof := results[0]
-        withMCtx mctx do
-          let proof := mkAppN proof lctxArr
-          unless ← isDefEq (.mvar mainGoal) proof do
-            throwError "The proof doesn't match the goal"
+        setMCtx mctx
+        let proof := mkAppN proof lctxArr
+        mainGoal.assign proof
         return ()
+      setMCtx mctx
   | _ => throwUnsupportedSyntax
 
 end RunTactic
@@ -485,7 +485,7 @@ section Test
 example (h : 3 = 2 + 1) : (2 + 1) = 3 := by
   box_proof
     rw [← h]
-    exact True.intro
+    exact True
 
 end Test
 
