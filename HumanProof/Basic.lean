@@ -433,21 +433,22 @@ def evalBoxTactic (stx : TSyntax `box_tactic) : TacticM Unit := do
 
 syntax (name := box_proof) "box_proof" ppLine boxTacticSeq : tactic
 
-def createProofBox (mvarId : MVarId) : MetaM Box := do
+def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
   -- is it wise to use the same `mvarId` here? Am I better off creating a fresh one?
   -- Jovan's opinion: maybe use a new one
   let mut box : Box := .metaVar mvarId (← mvarId.getTag) (← mvarId.getType) (.result <| .mvar mvarId)
-  let lctx := (← mvarId.getDecl).lctx.decls.toArray.filterMap id
+  let lctxArr := (← mvarId.getDecl).lctx.decls.toArray.filterMap id
   -- let localInstances := decl.localInstances -- probably don't need these, the relevant information is likely to already be in the `lctx`
-  for decl in lctx.reverse do -- reversing to add in the right order
+  for decl in lctxArr.reverse do -- reversing to add in the right order
     box := .forallB decl box
-  return box
+  return (lctxArr.map LocalDecl.toExpr, box)
 
-def initializeProofBox : TacticM Unit := do
+def initializeProofBox : TacticM (Array Expr) := do
   if (← getGoals).length > 1 then
     logWarning "Box proofs are meant to be initialized when there is just one goal."
-  let box ← createProofBox (← getMainGoal)
+  let (lctxArr, box) ← createProofBox (← getMainGoal)
   boxRef.set box
+  return lctxArr
 
 def _root_.Lean.Tactic.logTacticState : TacticM Unit := do
   for goal in (← getGoals) do
@@ -463,7 +464,7 @@ def boxProofElab : Tactic
     let mainGoal ← getMainGoal
     let mctx ← getMCtx
 
-    initializeProofBox
+    let lctxArr ← initializeProofBox
     logTacticStateAt start
 
     for tactic in seq.getElems do
@@ -476,11 +477,11 @@ def boxProofElab : Tactic
       let results ← newBox.getResults
       if h:(0 < results.size) then do
         let proof := results[0]
-        withMCtx mctx do
-          let proof ← mkAppM' proof ((← mainGoal.getDecl).lctx.decls.toArray.filterMap (LocalDecl.toExpr <$> ·))
-          unless ← isDefEq (.mvar mainGoal) proof do
-            throwError "Proof doesn't match the goal"
-        return
+        -- withMCtx mctx do
+        let proof := mkAppN proof lctxArr
+
+        discard <| isDefEq (.mvar mainGoal) proof
+        return ()
   | _ => throwUnsupportedSyntax
 
 end RunTactic
