@@ -109,6 +109,8 @@ def PathItem.format : PathItem → MessageData
   | orR (_inl : Box) => m!"orR"
   | haveB (decl : LocalDecl) (value : Expr) => m!"haveB {decl.type}, value: {value}"
 
+instance : ToMessageData PathItem := ⟨PathItem.format⟩
+
 instance : BEq PathItem where
   beq
     | .forallB .., .forallB ..
@@ -272,7 +274,7 @@ metavariable context.
 def traverseAssignedMVarIds (addresses : Std.HashMap MVarId (List PathItem)) : StateT CleanUpTacticState TacticM Unit := do
   let goals ← getGoals
   for mvarId in goals do
-    let some address := addresses[mvarId]? | throwError "NANANA incomplete addresses"
+    let some address := addresses[mvarId]? | throwError m!"NANANA incomplete addresses {addresses.values}"
     if ← mvarId.isAssigned then
       modify fun s => { s with assignedMVars := s.assignedMVars.push mvarId }
       mvarId.withContext do
@@ -405,26 +407,12 @@ TODO:
 
 section RunTactic
 
-open Elab Tactic
-
-
-
-def runTactic (box : Box) (address : List PathItem) (tac : TacticM Unit) : MetaM Box := do
-  sorry
-
-end RunTactic
-
-
-section Elab
-
-structure State where
-  box       : Box
-  goals     : Array MVarId
-  addresses : Std.HashMap MVarId (List PathItem)
-
 open Elab Parser Tactic
 
+initialize boxRef : IO.Ref Box ← IO.mkRef (Box.result <| mkApp2 (mkConst ``sorryAx) (mkConst ``True) (mkConst ``Bool.true))
+
 declare_syntax_cat box_tactic
+syntax (name := lean_tactic) tactic : box_tactic
 
 @[inline] def boxTacticParser (rbp : Nat := 0) : Parser :=
   categoryParser `box_tactic rbp
@@ -436,14 +424,69 @@ def boxTacticSeqBracketed : Parser := leading_parser
   "{" >> sepByIndentSemicolon boxTacticParser >> ppDedent (ppLine >> "}")
 
 def boxTacticSeq := leading_parser
-  boxTacticSeqBracketed <|> boxTacticSeq1Indented
+  ppIndent (boxTacticSeqBracketed <|> boxTacticSeq1Indented)
 
-syntax (name := lean_tactic) tactic : box_tactic
-
-def evalBoxTactic (stx : Syntax) (box : Box) (address : List PathItem) : MetaM Box := do
+def evalBoxTactic (stx : TSyntax `box_tactic) : TacticM Unit := do
   match stx with
-  | `(box_tactic| $tac:tactic) => runTactic box (evalTactic tac)
+  | `(box_tactic| $tac:tactic) => evalTactic tac
   | _ => throwUnsupportedSyntax
+
+syntax (name := box_proof) "box_proof" ppLine boxTacticSeq : tactic
+
+def createProofBox (mvarId : MVarId) : MetaM Box := do
+  -- is it wise to use the same `mvarId` here? Am I better off creating a fresh one?
+  -- Jovan's opinion: maybe use a new one
+  let mut box : Box := .metaVar mvarId (← mvarId.getTag) (← mvarId.getType) (.result <| .mvar mvarId)
+  let lctx := (← mvarId.getDecl).lctx.decls.toArray.filterMap id
+  -- let localInstances := decl.localInstances -- probably don't need these, the relevant information is likely to already be in the `lctx`
+  for decl in lctx.reverse do -- reversing to add in the right order
+    box := .forallB decl box
+  return box
+
+def initializeProofBox : TacticM Unit := do
+  if (← getGoals).length > 1 then
+    logWarning "Box proofs are meant to be initialized when there is just one goal."
+  let box ← createProofBox (← getMainGoal)
+  boxRef.set box
+
+def _root_.Lean.Tactic.logTacticState : TacticM Unit := do
+  for goal in (← getGoals) do
+    logInfo goal
+
+def _root_.Lean.Tactic.logTacticStateAt (stx : Syntax) : TacticM Unit := do
+  for goal in (← getGoals) do
+    logInfoAt stx goal
+
+@[incremental, tactic box_proof]
+def boxProofElab : Tactic
+  | `(tactic| box_proof%$start $seq*) => do
+    let mainGoal ← getMainGoal
+    let mctx ← getMCtx
+
+    initializeProofBox
+    logTacticStateAt start
+
+    for tactic in seq.getElems do
+      let box ← boxRef.get
+      let addresses ← createTacticState box
+      evalBoxTactic tactic
+      logTacticStateAt tactic
+      let newBox ← updateBox box addresses
+      boxRef.set newBox
+      let results ← newBox.getResults
+      if h:(0 < results.size) then do
+        let proof := results[0]
+        withMCtx mctx do
+          let proof ← mkAppM' proof ((← mainGoal.getDecl).lctx.decls.toArray.filterMap (LocalDecl.toExpr <$> ·))
+          unless ← isDefEq (.mvar mainGoal) proof do
+            throwError "Proof doesn't match the goal"
+        return
+  | _ => throwUnsupportedSyntax
+
+end RunTactic
+
+section Elab
+
 
 -- @[incremental]
 -- def evalBoxTacticSeq : Tactic :=
