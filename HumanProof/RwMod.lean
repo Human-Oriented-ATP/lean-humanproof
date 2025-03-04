@@ -1,8 +1,8 @@
-import Mathlib
+import Mathlib.Tactic
 
 example (a b : ℕ) : a+b = b+a := by exact Nat.add_comm a b
 
-open Lean Meta Elab Tactic Qq
+open Lean Meta Elab Parser Tactic Qq
 
 namespace ModRw
 
@@ -12,7 +12,7 @@ def Rewriter (n e : Q(ℤ)): Type :=
 partial
 def rwInt
     (n : Q(ℤ))
-    (rwRoot : ∀ e, Rewriter n e)
+    (rwRoot : (e : Q(ℤ)) → Rewriter n e)
     (e : Q(ℤ))
     : Rewriter n e := do
   match ← rwRoot e with
@@ -52,6 +52,12 @@ def rwInt
         return some ⟨q($ar ^ $b), q(Int.ModEq.pow $b $apf)⟩
       | none =>
         return none
+    | ~q(-$a) =>
+      match ← rwInt n rwRoot a with
+      | (some ⟨ar, apf⟩) =>
+        return some ⟨q(-$ar), q(Int.ModEq.neg $apf)⟩
+      | none =>
+        return none
     | _ => return none
 
 def rwZModEq (n a b : Q(ℤ))
@@ -75,22 +81,17 @@ def rwRootBasic (n₀ a₀ b₀ : Q(ℤ)) (pf : Q($a₀ ≡ $b₀ [ZMOD $n₀]))
     else
       return none
 
-def rwRootAdvanced (n e : Q(ℤ)) (eqn : Expr) : Rewriter n e := do
+def rwRootAdvanced (eqn : Expr) (discharger : TSyntax `discharger) (n e : Q(ℤ)) : Rewriter n e := do
   let thm ← inferType eqn -- the statement that `eqn` proves
   let (mvars, _, body) ← forallMetaTelescope thm -- the body of the statement
   let ⟨1, ~q(Prop), ~q($lhs ≡ $rhs [ZMOD $n])⟩ ← inferTypeQ body | throwError "Expected the equation to be of the form lhs ≡ rhs [ZMOD $mod]"
   match ← isDefEqQ (u := 1) lhs n with
   | .defEq _ =>
-    let mvars ← mvars.mapM instantiateMVars
-    -- the universally quantified variables that remain uninstantiated by unification
-    let sideGoals ← mvars.filterMapM fun mvar => do
-      if let .mvar mvarId := mvar then
-        pure <| some mvarId
-      else
-        pure none
-    -- this needs `TacticM` to work
-    -- appendGoals sideGoals.toList
-    return some ⟨rhs, mkAppN eqn mvars⟩
+    for mvar in mvars do
+      let mvarId := mvar.mvarId!
+      unless ← mvarId.isAssigned do
+        let ⟨[], _⟩ ← Elab.runTactic mvarId discharger | throwError "Goal {mvarId} not closed by discharger."
+    return some ⟨rhs, mkAppN eqn (← mvars.mapM instantiateMVars)⟩
   | .notDefEq => return none
 
 def rwTopStep
@@ -149,16 +150,18 @@ elab "rw_mod " t:term : tactic =>
       rwModTarget rwRoot
     | none => throwError "mod_rw must be provided with a proof of a statement of the form a ≡ b [ZMOD n]"
 
-elab "rw_mod " t:term " at " i:ident : tactic =>
-  withMainContext do
-    let pf ← elabTerm t none
-    let t ← inferType pf
-    match t.app3? `Int.ModEq with
-    | some (n,a,b) =>
-      let rwRoot := rwRootBasic n a b pf
-      let fvarId ← getFVarId i
-      rwModLocalDecl rwRoot fvarId
-    | none => throwError "mod_rw must be provided with a proof of a statement of the form a ≡ b [ZMOD n]"
+open Lean Elab Tactic Parser Tactic
+
+elab "rw_mod " t:term disch:(discharger)? loc:(location)? : tactic => withMainContext do
+  let pf ← elabTerm t none
+  let t ← inferType pf
+  let
+  match t.app3? `Int.ModEq with
+  | some (n,a,b) =>
+    let rwRoot := rwRootAdvanced n a b (disch.getD (← `(tactic| assumption))) pf
+    let fvarId ← getFVarId i
+    rwModLocalDecl rwRoot fvarId
+  | none => throwError "mod_rw must be provided with a proof of a statement of the form a ≡ b [ZMOD n]"
 
 example (a b c d n : ℤ) (h : b + c * d ≡ d + b * b [ZMOD n])
 (eq : a ≡ b [ZMOD n])
