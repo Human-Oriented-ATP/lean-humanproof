@@ -1,4 +1,4 @@
-import Mathlib
+import Mathlib.Tactic
 
 example (a b : ℕ) : a+b = b+a := by exact Nat.add_comm a b
 
@@ -61,6 +61,12 @@ def rwInt
         return some ⟨q($ar ^ $b), q(Int.ModEq.pow $b $apf)⟩
       | none =>
         return none
+    | ~q(-$a) =>
+      match ← rwInt n rwRoot a with
+      | (some ⟨ar, apf⟩) =>
+        return some ⟨q(-$ar), q(Int.ModEq.neg $apf)⟩
+      | none =>
+        return none
     | _ => return none
 
 def rwZModEq (n a b : Q(ℤ))
@@ -84,23 +90,18 @@ def rwRootBasic (n₀ a₀ b₀ : Q(ℤ)) (pf : Q($a₀ ≡ $b₀ [ZMOD $n₀]))
     else
       return none
 
-def rwRootAdvanced (eqn : Expr) : RwRoot := fun n e => do
+def rwRootAdvanced (eqn : Expr) (discharger : TSyntax ``discharger) : RwRoot := fun n e => do
   let thm ← inferType eqn -- the statement that `eqn` proves
   let (mvars, _, body) ← forallMetaTelescope thm -- the body of the statement
-  let ⟨1, ~q(Prop), ~q($lhs ≡ $rhs [ZMOD $n])⟩ ← inferTypeQ body | throwError "Expected the equation to be of the form lhs ≡ rhs [ZMOD $mod]"
-  match ← isDefEqQ (u := 1) lhs n with
-  | .defEq _ =>
-    let mvars ← mvars.mapM instantiateMVars
-    -- the universally quantified variables that remain uninstantiated by unification
-    let sideGoals ← mvars.filterMapM fun mvar => do
-      if let .mvar mvarId := mvar then
-        pure <| some mvarId
-      else
-        pure none
-    -- this needs `TacticM` to work
-    -- appendGoals sideGoals.toList
-    return some ⟨rhs, mkAppN eqn mvars⟩
-  | .notDefEq => return none
+  let ⟨1, ~q(Prop), ~q($lhs ≡ $rhs [ZMOD $n'])⟩ ← inferTypeQ body | throwError "Expected the equation to be of the form lhs ≡ rhs [ZMOD $mod]"
+  match ← isDefEqQ (u := 1) n n', ← isDefEqQ (u := 1) lhs e with
+  | .defEq _, .defEq _ =>
+    for mvar in mvars do
+      let mvarId := mvar.mvarId!
+      unless ← mvarId.isAssigned do
+        let ⟨[], _⟩ ← Elab.runTactic mvarId discharger | throwError "Goal {mvarId} not closed by discharger."
+    return some ⟨rhs, mkAppN eqn (← mvars.mapM instantiateMVars)⟩
+  | _, _ => return none
 
 def rwTopStep
   (rw_root : ∀ n e : Q(ℤ), MetaM (Option (Σ re : Q(ℤ), Q($e ≡ $re [ZMOD $n]))))
@@ -116,8 +117,6 @@ def rwTopStep
 def SimpConfig : Simp.Config where
   zeta := false
   proj := false
-
-#print Simp.Simproc
 
 def rwTop
   (rwRoot : ∀ n e : Q(ℤ), RwRootTyped n e)
@@ -148,16 +147,17 @@ def rwModLocalDecl (rwRoot : ∀ n e, RwRootTyped n e) (fvarId : FVarId) :
   if mvarIdNew == mvarId then throwError "push made no progress"
   replaceMainGoal [mvarIdNew]
 
-elab "rw_mod " t:term loc?:(location)? : tactic =>
+elab "rw_mod " d?:(discharger)? t:term loc?:(location)? : tactic =>
   withMainContext do
+    let d : TSyntax ``discharger := (d?.getD (← `(discharger| (disch := assumption))))
     let loc := match loc? with
     | some loc => expandLocation loc
     | none => Location.targets #[] true
     let pf ← elabTerm t none
-    let t ← inferType pf
-    let rwRoot ← match t.app3? `Int.ModEq with
-    | some (n,a,b) => pure <| (rwRootBasic n a b pf)
-    | none => throwError "mod_rw must be provided with a proof of a statement of the form a ≡ b [ZMOD n]"
+    let rwRoot := rwRootAdvanced pf d
+    -- let rwRoot ← match t.app3? `Int.ModEq with
+    -- | some (n,a,b) => pure <| (rwRootBasic n a b pf)
+    -- | none => throwError "mod_rw must be provided with a proof of a statement of the form a ≡ b [ZMOD n]"
     withLocation loc
       (rwModLocalDecl rwRoot)
       (rwModTarget rwRoot)
