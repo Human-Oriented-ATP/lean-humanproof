@@ -9,6 +9,11 @@ structure Zipper where
   localInstances : LocalInstances
   mctx           : MetavarContext
 
+inductive Coord where
+  | forallB | metaVar | andL | andR | orL | orR | haveB
+  deriving Repr, BEq
+
+
 def Zipper.up (zipper : Zipper) : Option Zipper := do
   let item :: path := zipper.path | failure
   let { cursor, .. } := zipper
