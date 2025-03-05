@@ -175,14 +175,14 @@ structure CreateTacticState where
 
 abbrev CreateTacticM := ReaderT (List PathItem) StateRefT CreateTacticState TacticM
 
-def _root_.Lean.Expr.replaceVars (e : Expr) : CreateTacticM Expr := do
-  Core.transform e (pre := fun e => do
+def _root_.Lean.Expr.replaceVars (eIn : Expr) : CreateTacticM Expr := do
+  Core.transform eIn (pre := fun e => do
     match e with
     | .mvar mvarId =>
       if let some e := (← get).mvarReplacements[mvarId]? then
         return .done e
       else
-        throwError "Meta variable {repr mvarId} isn't bound :((("
+        throwError "Meta variable {mvarId} isn't bound :((( in {eIn}"
     | .fvar fvarId =>
       if let some e := (← get).fvarReplacements[fvarId]? then
         return .done e
@@ -370,6 +370,7 @@ where
         let body ← withPathItem (.forallB decl hidden) <| go body
         return .forallB decl body hidden
       | .metaVar mvarId name type body =>
+        logInfo m! "instantiated {type}"
         let type ← instantiateMVars type
         let body ← withPathItem (.metaVar mvarId name type) <| go body
         return .metaVar mvarId name type body
@@ -399,6 +400,7 @@ where
       -- need to ensure `mvarId`s are in the right order (we don't care right now)
       for mvarId in mvarIds do
         let { userName, type, .. } ← mvarId.getDecl
+        let type ← instantiateMVars type
         box := .metaVar mvarId userName type box
     if let some haves := newHaves[address]? then
       for (decl, value) in haves do
@@ -447,9 +449,11 @@ def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.Has
   | `(box_tactic| $tactic:tactic) =>
     let goalsBefore ← getGoals
     evalTactic tactic
-    let _goalsAfter ← getGoals
+    let goalsAfter ← getGoals
     liftMetaM <| logInfo m! "after tactic: {← box.show}"
-    updateBox box goalsBefore addresses
+    let box ← updateBox box goalsBefore addresses
+    liftMetaM <| logInfo m! "after update: {← box.show}"
+    return box
   | _ => throwUnsupportedSyntax
 
 def boxLoop (box : Box) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Expr TacticM Box := do
@@ -471,9 +475,8 @@ def boxProofElab : Tactic
 
     match ← boxLoop box tactics with
     | .error proof =>
-      let proof := mkAppN proof lctxArr
-      mainGoal.assign proof
-      logInfo "DONDOND"
+      mainGoal.assign (mkAppN proof lctxArr)
+      mainGoal.withContext <| logInfo m!"Done, with proof term {indentExpr proof}"
     | .ok box =>
       throwError "Box proof is not finished\n{← box.show}"
   | _ => throwUnsupportedSyntax
@@ -487,20 +490,17 @@ example (g : 1 = 1) (h : 3 = 2 + 1) : (2 + 1) = 3 := by
   box_proof
     rw [← h]
 
-example (n m k : Nat) (h: n = m) (h' : m = k) : n = k := by
+example (n m k : Nat) (h: n = m) (h' : m = k) : n = k ∧ n = k := by
   box_proof
+    constructor
     rw [← h] at h'
     rw [h']
+    exact h'
 
 
 end Test
 
 section Elab
-
-
--- @[incremental]
--- def evalBoxTacticSeq : Tactic :=
---   Term.withNarrowedArgTacticReuse (argIdx := 0) evalBoxTactic
 
 
 end Elab
