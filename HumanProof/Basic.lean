@@ -291,6 +291,8 @@ def traverseAssignedMVarIds (goals : List MVarId) (addresses : Std.HashMap MVarI
       let e ← instantiateMVars (.mvar mvarId)
       let newE ← Core.transform e (pre := fun e => do
         if let .mvar mvarId := e.getAppFn then
+          if goals.contains mvarId then
+            return .continue
           logInfo m!"looking at {mkMVar mvarId}"
           if let some address' := (← get).newMVars[mvarId]? then
             let address' := address'.commonPrefix address
@@ -398,7 +400,7 @@ where
       box := body
     if let some mvarIds := newMVars[address]? then
       -- need to ensure `mvarId`s are in the right order (we don't care right now)
-      for mvarId in mvarIds do
+      for mvarId in mvarIds.reverse do
         let { userName, type, .. } ← mvarId.getDecl
         let type ← instantiateMVars type
         box := .metaVar mvarId userName type box
