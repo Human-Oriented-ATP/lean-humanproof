@@ -55,17 +55,19 @@ def Box.show (box : Box) : MetaM (MessageData) := do
   match box with
   | forallB decl body _hidden =>
     withExistingLocalDecls [decl] do
-      return m! "∀ ({decl.userName} : {decl.type}), {← body.show}"
+      addMessageContext m! "∀ ({decl.userName} : {decl.type}),\n{← body.show}"
   | metaVar mvarId name type body => do
     modifyMCtx (·.addExprMVarDeclExp mvarId name (← getLCtx) (← getLocalInstances) type (kind := .syntheticOpaque))
-    return m! "?{mkMVar mvarId} : {type}, {← body.show}"
+    addMessageContext m! "{mkMVar mvarId} : {type},\n{← body.show}"
   | result r => return m! "▸ {r}"
   | and decl value body =>
     withExistingLocalDecls [decl] do
-      return m! "And {decl.userName} : {decl.type} := {← value.show}\n{← body.show}"
+      addMessageContext m! "And {decl.userName} : {decl.type} := {← value.show}\n{← body.show}"
   | or inl inr =>
     return m! "{← inl.show} Or\n{← inr.show}"
-  | haveB decl value body => return m! "Have {decl.userName} : {decl.type} := {value}\n{← body.show}"
+  | haveB decl value body =>
+    withExistingLocalDecls [decl] do
+      addMessageContext m! "Have {decl.userName} : {decl.type} := {value}\n{← body.show}"
 
 namespace Box
 
@@ -103,6 +105,13 @@ where
       let u1 ← getLevel α
       let u2 ← getLevel ety
       return mkAppN (.const ``letFun [u1, u2]) #[α, β, value, f]
+
+def getResult (box : Box) : MetaM (Option Expr) := do
+  let results ← box.getResults
+  if h : results.size ≠ 0 then
+    return results[0]
+  else
+    return none
 
 inductive PathItem where
   | forallB (decl : LocalDecl) (hidden : Bool)
@@ -192,10 +201,18 @@ def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM 
     k <| .ldecl index fvar.fvarId! userName (← type.replaceVars) (← value.replaceVars) nonDep kind
 
 
-def createTacticState (box : Box) : TacticM (Box × Std.HashMap MVarId (List PathItem)) := do
+def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List PathItem)) := do
   setGoals []
   let (box, s) ← (go box).run [] |>.run {}
-  return (box, s.addresses)
+  liftMetaM <| logInfo m! "renamed box: {← box.show}"
+
+  if (← getGoals).isEmpty then
+    if let some proof ← box.getResult then
+      throwThe _ proof
+    else
+      throwError "couldn't get the result from {← box.show}"
+  else
+    return (box, s.addresses)
 where
   go : Box → (ReaderT (List PathItem) StateRefT CreateTacticState TacticM) Box
   | forallB decl body hidden => do
@@ -215,7 +232,7 @@ where
     let address := (← read).reverse
     modify (· %.addresses (·.insert mvarId address))
     .metaVar mvarId name type <$> withReader (.metaVar mvarId name type :: ·) do go body
-  | result r => do let r' ← r.replaceVars; liftMetaM <| logInfo m! "changed {r} -> {r'}"; return .result r'
+  | result r => return .result (← r.replaceVars)
   | and decl value body => do
     let value ← withReader (.andL decl body :: ·) do go value
     decl.withReplaceVars fun decl => do
@@ -267,7 +284,6 @@ metavariable context.
 -/
 def traverseAssignedMVarIds (goals : List MVarId) (addresses : Std.HashMap MVarId (List PathItem)) : StateT CleanUpTacticState MetaM Unit := do
   for mvarId in goals do
-    logInfo s! "HOHOHO {goals.map (·.1)}; {mvarId.1}"
     let some address := addresses[mvarId]? | throwError m!"NANANA incomplete addresses {addresses.values}"
     if ← mvarId.isAssigned then
       modify fun s => { s with assignedMVars := s.assignedMVars.push mvarId }
@@ -275,6 +291,7 @@ def traverseAssignedMVarIds (goals : List MVarId) (addresses : Std.HashMap MVarI
       let e ← instantiateMVars (.mvar mvarId)
       let newE ← Core.transform e (pre := fun e => do
         if let .mvar mvarId := e.getAppFn then
+          logInfo m!"looking at {mkMVar mvarId}"
           if let some address' := (← get).newMVars[mvarId]? then
             let address' := address'.commonPrefix address
             modify fun s => { s with newMVars := s.newMVars.insert mvarId address' }
@@ -296,7 +313,7 @@ def traverseAssignedMVarIds (goals : List MVarId) (addresses : Std.HashMap MVarI
                 args := args.push (← getFVarLocalDecl fvar, arg)
               let replacement := (← mvarIdPending.getDecl).lctx.mkLambda fvars (← instantiateMVars (.mvar mvarIdPending))
               mvarId.assign replacement
-              return .continue (← instantiateMVars e)
+              return .visit (← instantiateMVars e)
           else
             modify fun s => { s with newMVars := s.newMVars.insert mvarId address }
             return .continue
@@ -424,49 +441,41 @@ def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
     box := .forallB decl box
   return (lctxArr.map LocalDecl.toExpr, box)
 
--- def _root_.Lean.Tactic.logTacticState : TacticM Unit := do
---   for goal in (← getGoals) do
---     logInfo goal
--- def _root_.Lean.Tactic.logTacticStateAt (stx : Syntax) : TacticM Unit := do
---   for goal in (← getGoals) do
---     logInfoAt stx goal
+
+def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.HashMap MVarId (List PathItem)) : TacticM Box := withRef tactic do
+  match tactic with
+  | `(box_tactic| $tactic:tactic) =>
+    let goalsBefore ← getGoals
+    evalTactic tactic
+    let _goalsAfter ← getGoals
+    liftMetaM <| logInfo m! "after tactic: {← box.show}"
+    updateBox box goalsBefore addresses
+  | _ => throwUnsupportedSyntax
+
+def boxLoop (box : Box) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Expr TacticM Box := do
+  let box ← tactics.getElems.foldlM (init := box) fun box (tactic : TSyntax `box_tactic) => do
+    let (box, addresses) ← withRef tactic do createTacticState box
+    runBoxTactic box tactic addresses
+  let (box, _addresses) ← createTacticState box
+  return box
+
 
 @[incremental, tactic box_proof]
 def boxProofElab : Tactic
-  | `(tactic| box_proof%$start $seq*) => withMainContext do
+  | `(tactic| box_proof%$start $tactics*) => withMainContext do
     if (← getGoals).length > 1 then
       logWarning "Box proofs are meant to be initialized when there is just one goal."
-
     let mainGoal ← getMainGoal
-    setGoals []
-    logInfo m! "mainGoal: {Expr.mvar mainGoal}"
-
     let (lctxArr, box) ← createProofBox mainGoal
     withLCtx {} {} do
-    let mut box := box
-    -- logTacticStateAt start
 
-    for tactic in seq.getElems do
-      let (boxNew, addresses) ← createTacticState box
-      box := boxNew
-      logInfo m! "renamed box: {← box.show}"
-
-      let goalsBefore ← getGoals
-      evalBoxTactic tactic
-      logInfo m! "after tactic: {← box.show}"
-      -- logTacticStateAt tactic
-      box ← updateBox box goalsBefore addresses
-      setGoals []
-
-      let results ← box.getResults
-      if h : 0 < results.size then
-        let proof := results[0]
-        let proof := mkAppN proof lctxArr
-        mainGoal.assign proof
-        logInfo "DONDOND"
-        return ()
-      logInfo m! "{← box.show}"
-    throwError "Box proof is not finished"
+    match ← boxLoop box tactics with
+    | .error proof =>
+      let proof := mkAppN proof lctxArr
+      mainGoal.assign proof
+      logInfo "DONDOND"
+    | .ok box =>
+      throwError "Box proof is not finished\n{← box.show}"
   | _ => throwUnsupportedSyntax
 
 end RunTactic
@@ -477,17 +486,11 @@ example (g : 1 = 1) (h : 3 = 2 + 1) : (2 + 1) = 3 := by
   skip
   box_proof
     rw [← h]
-    -- exact True
 
 example (n m k : Nat) (h: n = m) (h' : m = k) : n = k := by
   box_proof
-    -- skip
-    -- skip
     rw [← h] at h'
-    skip
-    -- rw [h] at h'
-    -- skip
-    -- exact h'
+    rw [h']
 
 
 end Test
