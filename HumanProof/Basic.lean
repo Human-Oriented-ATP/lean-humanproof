@@ -235,7 +235,7 @@ where
         return .forallB decl body hidden
   | metaVar mvarId name type body => do
     let type ← type.replaceVars
-    let mvar ← mkFreshExprMVar type (userName := name) (kind := .synthetic)
+    let mvar ← mkFreshExprMVar type (userName := name) (kind := .syntheticOpaque)
     modify (· %.mvarReplacements (·.insert mvarId mvar))
     let mvarId := mvar.mvarId!
     pushGoal mvarId
