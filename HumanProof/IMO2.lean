@@ -1,5 +1,5 @@
 import HumanProof.Basic
-import Mathlib.Tactic
+import Mathlib
 /-
 free variables a,b,n0 : Z
 metavariables:
@@ -15,7 +15,14 @@ Constraints (goals):
 * M | b^N + a
 -/
 example (a b : ℤ) (ha : a > 1) (hb : b > 1) : ∃ M : ℤ, M > 1 ∧ ∀ n0 : ℤ, ∃ N : Nat, N > n0 ∧ M ∣ a^N + b ∧ M ∣ b^N + a := by
-box_proof
-  constructor
-  constructor
-  on_goal 2 => intro n0
+  box_proof
+  refine ⟨?m, ?_, ?_⟩
+  intro n0
+  refine ⟨?N, ?_, ?_, ?_⟩
+  apply Int.modEq_zero_iff_dvd.mp
+  on_goal 2 => apply Int.modEq_zero_iff_dvd.mp
+  apply Int.modEq_add_left_cancel' (-a)
+
+
+#eval 0
+#check Int.modEq_add_left_cancel'

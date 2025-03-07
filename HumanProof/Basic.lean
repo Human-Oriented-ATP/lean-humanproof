@@ -56,13 +56,14 @@ def Box.show (box : Box) : MetaM (MessageData) := do
   | forallB decl body _hidden =>
     withExistingLocalDecls [decl] do
       addMessageContext m! "∀ ({decl.userName} : {decl.type}),\n{← body.show}"
-  | metaVar mvarId name type body => do
-    modifyMCtx (·.addExprMVarDeclExp mvarId name (← getLCtx) (← getLocalInstances) type (kind := .syntheticOpaque))
+  | metaVar mvarId _name type body => do
+    -- modifyMCtx (·.addExprMVarDeclExp mvarId name (← getLCtx) (← getLocalInstances) type (kind := .syntheticOpaque))
     addMessageContext m! "{mkMVar mvarId} : {type},\n{← body.show}"
   | result r => return m! "▸ {r}"
   | and decl value body =>
+    let value ← value.show
     withExistingLocalDecls [decl] do
-      addMessageContext m! "And {decl.userName} : {decl.type} := {← value.show}\n{← body.show}"
+      addMessageContext m! "And {decl.userName} : {decl.type} := {value}\n{← body.show}"
   | or inl inr =>
     return m! "{← inl.show} Or\n{← inr.show}"
   | haveB decl value body =>
@@ -196,14 +197,22 @@ def _root_.Lean.Expr.replaceVars (eIn : Expr) : CreateTacticM Expr := do
     | _ => return .continue)
 
 def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM α) (hidden : Bool := false) : LocalDecl → CreateTacticM α
-  | .cdecl index fvarId userName type bi kind =>
-    (if hidden then fun k => do k <| .fvar (← mkFreshFVarId) else withLocalDecl userName bi type) fun fvar => do
-      modify (· %.fvarReplacements (·.insert fvarId fvar))
-      k <| .cdecl index fvar.fvarId! userName (← type.replaceVars) bi kind
-  | .ldecl index fvarId userName type value nonDep kind => do
-    withLetDecl userName type value fun fvar => do
+  | .cdecl index fvarId userName type bi kind => do
+    let type ← type.replaceVars
+    if hidden then
+      let fvarId' ← mkFreshFVarId
+      modify (· %.fvarReplacements (·.insert fvarId (.fvar fvarId')))
+      k (.cdecl index fvarId' userName type bi kind)
+    else
+      withLocalDecl userName bi type (kind := kind) fun fvar => do
+        modify (· %.fvarReplacements (·.insert fvarId fvar))
+        k <| (← fvar.fvarId!.getDecl)
+  | .ldecl _ fvarId userName type value _ kind => do
+    let type ← type.replaceVars
+    let value ← value.replaceVars
+    withLetDecl userName type value (kind := kind) fun fvar => do
     modify (· %.fvarReplacements (·.insert fvarId fvar))
-    k <| .ldecl index fvar.fvarId! userName (← type.replaceVars) (← value.replaceVars) nonDep kind
+    k <| (← fvar.fvarId!.getDecl)
 
 
 def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List PathItem)) := do
@@ -221,13 +230,9 @@ def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVa
 where
   go : Box → (ReaderT (List PathItem) StateRefT CreateTacticState TacticM) Box
   | forallB decl body hidden => do
-      if hidden then
+      decl.withReplaceVars (hidden := hidden) fun decl => do
         let body ← withReader (.forallB decl hidden :: ·) do go body
         return .forallB decl body hidden
-      else
-        decl.withReplaceVars (hidden := hidden) fun decl => do
-          let body ← withReader (.forallB decl hidden :: ·) do go body
-          return .forallB decl body hidden
   | metaVar mvarId name type body => do
     let type ← type.replaceVars
     let mvar ← mkFreshExprMVar type (userName := name)
@@ -266,7 +271,7 @@ def commonPrefix2 {α} [BEq α] (as bs : List α) : List α :=
 
 def commonPrefix {α} [BEq α] (ass : List (List α)) : List α :=
   match ass with
-  | [] => []
+  | [] => panic! "empty list passed to `commonPrefix`"
   | as :: ass => ass.foldl (init := as) commonPrefix2
 
 inductive BoxOrigin where
@@ -319,7 +324,6 @@ partial def computeAndAddress (fvarId : FVarId)
   let tail ← mvarId.withContext do fvars.toList.mapM fun fvar => return .forallB (← fvar.fvarId!.getDecl) (hidden := false)
   let path := path ++ .imaginaryAnd fvarId :: tail
   modify (·.insert (.newAnd fvarId) path)
-  logInfo m! "computed {path}"
   return path
 
 /-- The addresses in this structure are stored in reverse order. -/
@@ -364,7 +368,6 @@ partial def traverseAssignedMVarIds (goals : List MVarId) (addresses : Std.HashM
   for (fvarId, origins, rest) in newAnds do
     let address := (commonPrefix <| origins.toList.map (addresses[·]!)).reverse
     ctx :=.newAnds (·.insertInArray address rest)
-  liftMetaM do logInfo m! "HA {ctx.newMVars.keys}"
   return ctx
 where
   mkNewAnd (fvars : Array Expr) (i : Nat) (mvarId mvarIdPending : MVarId) (origin : BoxOrigin) : StateT CleanUpTacticState MetaM Unit := do
