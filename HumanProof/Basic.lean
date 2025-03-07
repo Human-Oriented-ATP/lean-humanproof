@@ -218,7 +218,7 @@ def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM 
 def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List PathItem)) := do
   setGoals []
   let (box, s) ← (go box).run [] |>.run {}
-  liftMetaM <| logInfo m! "renamed box: {← box.show}"
+  -- liftMetaM <| logInfo m! "renamed box: {← box.show}"
 
   if (← getGoals).isEmpty then
     if let some proof ← box.getResult then
@@ -390,7 +390,7 @@ where
         if ← mvarId.isAssigned then
           return .visit (← instantiateMVars e)
         if goals.contains mvarId then return .continue
-        logInfo m!"looking at {mkMVar mvarId}"
+        -- logInfo m!"looking at {mkMVar mvarId}"
         if let some { mvarIdPending, fvars } ← getDelayedMVarAssignment? mvarId then
           mvarIdPending.withContext do
             let allArgs := e.getAppArgs
@@ -531,9 +531,9 @@ def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.Has
     let goalsBefore ← getGoals
     evalTactic tactic
     let goalsAfter ← getGoals
-    liftMetaM <| logInfo m! "after tactic: {← box.show}"
+    -- liftMetaM <| logInfo m! "after tactic: {← box.show}"
     let box ← updateBox box goalsBefore addresses
-    liftMetaM <| logInfo m! "after update: {← box.show}"
+    -- liftMetaM <| logInfo m! "after update: {← box.show}"
     return box
   | _ => throwUnsupportedSyntax
 
@@ -557,7 +557,7 @@ def boxProofElab : Tactic
     match ← boxLoop box tactics with
     | .error proof =>
       mainGoal.assign (mkAppN proof lctxArr)
-      mainGoal.withContext <| logInfo m!"Done, with proof term {indentExpr proof}"
+      -- mainGoal.withContext <| logInfo m!"Done, with proof term {indentExpr proof}"
     | .ok box =>
       throwError "Box proof is not finished\n{← box.show}"
   | _ => throwUnsupportedSyntax

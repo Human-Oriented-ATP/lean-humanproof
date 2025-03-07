@@ -1,5 +1,7 @@
 import HumanProof.Basic
 import Mathlib
+import RwMod
+
 /-
 free variables a,b,n0 : Z
 metavariables:
@@ -18,11 +20,16 @@ example (a b : ℤ) (ha : a > 1) (hb : b > 1) : ∃ M : ℤ, M > 1 ∧ ∀ n0 : 
   box_proof
   refine ⟨?m, ?_, ?_⟩
   intro n0
-  refine ⟨?N, ?_, ?_, ?_⟩
+  refine ⟨?N, ?_, ?goal2, ?goal1⟩
   apply Int.modEq_zero_iff_dvd.mp
+  apply Int.ModEq.add_left_cancel' (-b ^ ?N); ring_nf
   on_goal 2 => apply Int.modEq_zero_iff_dvd.mp
-  apply Int.modEq_add_left_cancel' (-a)
+  on_goal 2 => apply Int.ModEq.add_left_cancel' (-a ^ ?N); ring_nf
+  rw_mod ?goal2
 
+  skip
 
 #eval 0
-#check Int.modEq_add_left_cancel'
+#check Int.ModEq._left_cancel'
+
+#check modEq_add_
