@@ -559,7 +559,7 @@ def boxProofElab : Tactic
       mainGoal.assign (mkAppN proof lctxArr)
       -- mainGoal.withContext <| logInfo m!"Done, with proof term {indentExpr proof}"
     | .ok box =>
-      throwError "Box proof is not finished\n{← box.show}"
+      throwError "Box proof is not finished"--\n{← box.show}"
   | _ => throwUnsupportedSyntax
 
 end RunTactic
