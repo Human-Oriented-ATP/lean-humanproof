@@ -545,7 +545,7 @@ def boxLoop (box : Box) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Ex
   return box
 
 
-@[incremental, tactic box_proof]
+@[tactic box_proof]
 def boxProofElab : Tactic
   | `(tactic| box_proof%$start $tactics*) => withMainContext do
     if (← getGoals).length > 1 then
