@@ -244,10 +244,10 @@ where
     .metaVar mvarId name type <$> withReader (.metaVar mvarId name type :: ·) do go body
   | result r => return .result (← r.replaceVars)
   | and decl value body => do
+    let decl ← decl.withReplaceVars pure
     let value ← withReader (.andL decl body :: ·) do go value
-    decl.withReplaceVars fun decl => do
-      let body ← withReader (.andR decl body :: ·) do go body
-      return .and decl value body
+    let body ← withReader (.andR decl body :: ·) do go body
+    return .and decl value body
   | or inl inr => do
     -- We should think about how to name the goals so that it helps the user.
     let inl ← withReader (.orL inr :: ·) do go inl
@@ -531,9 +531,9 @@ def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.Has
     let goalsBefore ← getGoals
     evalTactic tactic
     let goalsAfter ← getGoals
-    -- liftMetaM <| logInfo m! "after tactic: {← box.show}"
+    liftMetaM <| logInfo m! "after tactic: {← box.show}"
     let box ← updateBox box goalsBefore addresses
-    -- liftMetaM <| logInfo m! "after update: {← box.show}"
+    liftMetaM <| logInfo m! "after update: {← box.show}"
     return box
   | _ => throwUnsupportedSyntax
 
