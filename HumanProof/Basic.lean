@@ -383,6 +383,12 @@ where
   traverse (mvarId : MVarId) (origin : BoxOrigin) : StateT CleanUpTacticState MetaM Unit :=
     discard <| mvarId.withContext do Core.transform (← instantiateMVars (.mvar mvarId)) (pre := fun e => do
       match e.getAppFn with
+      | .const ``letFun _ =>
+        if e.getAppNumArgs = 4 then
+          let f := e.appArg!
+          let v := e.appFn!.appArg!
+          return .visit (f.betaRev #[v])
+        return .continue
       | .fvar fvarId =>
         modify (· %.newAnds (·.modify fvarId fun (app, rest) => (app.insert origin, rest)))
         return .continue
@@ -397,18 +403,20 @@ where
             let mut args : Array (LocalDecl × Expr) := #[]
             let mut i := 0
             repeat
-              if h : i ≥ fvars.size then
+              if h : fvars.size ≤ i then
                 mvarId.assign <| (← mvarIdPending.getDecl).lctx.mkLambda fvars (← instantiateMVars (.mvar mvarIdPending))
                 break
               else
               let fvar := fvars[i]
-              let some arg := allArgs[i]? | mkNewAnd fvars i mvarId mvarIdPending origin; break
+              let some arg := allArgs[i]? |
+                mkNewAnd fvars i mvarId mvarIdPending origin
+                break
               if arg.isFVar then
                 continue
               if arg.hasLooseBVars then
                 mkNewAnd fvars i mvarId mvarIdPending origin; break
               let fvarDecl ← getFVarLocalDecl fvar
-              modify (· %.newHaves (·.push (fvarDecl, arg, origin))) -- shortenedPath)))
+              modify (· %.newHaves (·.push (fvarDecl, arg, origin)))
               args := args.push (← getFVarLocalDecl fvar, arg)
               i := i + 1
             return .continue -- .visit (← instantiateMVars e)
@@ -475,8 +483,8 @@ where
         box := .metaVar mvarId userName type box
     if let some newAnds := newAnds[address]? then
       for (decl, fvars, mvarId) in newAnds do
-        let e ← instantiateMVars (.mvar mvarId)
-        let value := .result e
+        let decl ← decl.instantiateMVars
+        let value := .result (← instantiateMVars (.mvar mvarId))
         let value ← mvarId.withContext do fvars.foldrM (init := value) fun fvar box =>
           return Box.forallB (← fvar.fvarId!.getDecl) box (hidden := false)
         let value ← withPathItem (.imaginaryAnd decl.fvarId) <| go value
@@ -484,6 +492,8 @@ where
 
     if let some haves := newHaves[address]? then
       for (decl, value) in haves do
+        let decl ← decl.instantiateMVars
+        let value ← instantiateMVars value
         box := .haveB decl value box
     return box
 
@@ -574,6 +584,7 @@ example (g : 1 = 1) (h : 3 = 2 + 1) : (2 + 1) = 3 := by
 example (n m k : Nat) (h: n = m) (h' : m = k) : n = k ∧ n = k := by
   box_proof
     constructor
+    have x : 1 = 1 := rfl
     rw [← h] at h'
     rw [h']
     exact h'
