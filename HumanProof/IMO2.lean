@@ -1,5 +1,5 @@
 import HumanProof.Basic
-import Mathlib
+import Mathlib.Tactic
 import HumanProof.RwMod
 
 #check Nat.totient
