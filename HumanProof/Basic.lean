@@ -422,7 +422,6 @@ def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
 
 
 def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.HashMap MVarId (List PathItem)) : TacticM Box := do
-  withTacticInfoContext tactic do
   match tactic with
   | `(box_tactic| backup) => makeBackup box
   | `(box_tactic| admit_goal $h $[$n]?) =>
@@ -438,14 +437,13 @@ def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.Has
     updateBox box goalsBefore addresses
   | _ => throwUnsupportedSyntax
 
-def boxLoop (box : Box) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Expr TacticM Box := do
-  let box ← tactics.getElems.foldlM (init := box) fun box (tactic : TSyntax `box_tactic) => withRef tactic do
-    let (box, addresses) ← withRef tactic do createTacticState box
+def boxLoop (box : Box) (start : Syntax) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Expr TacticM Box := do
+  let init ← withRef start (createTacticState box)
+  let (box, _) ← tactics.getElems.foldlM (init := init) fun (box, addresses) (tactic : TSyntax `box_tactic) =>
+    withRef tactic do withTacticInfoContext tactic do
     let box ← runBoxTactic box tactic addresses
     trace[box_proof] "after update: {← box.show}"
-    return box
-
-  let (box, _addresses) ← createTacticState box
+    createTacticState box
   return box
 
 
@@ -458,12 +456,13 @@ def boxProofElab : Tactic
     let (lctxArr, box) ← createProofBox mainGoal
     withLCtx {} {} do
 
-    match ← boxLoop box tactics with
+    match ← boxLoop box start tactics with
     | .error proof =>
       trace[box_proof]"proof term{indentExpr proof}"
       mainGoal.assign (mkAppN proof lctxArr)
       -- mainGoal.withContext <| logInfo m!"Done, with proof term {indentExpr proof}"
     | .ok box =>
+      trace[box_proof]"unfinished box: {← box.show}"
       throwError "Box proof is not finished"--\n{← box.show}"
   | _ => throwUnsupportedSyntax
 
