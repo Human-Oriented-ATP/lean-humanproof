@@ -90,16 +90,13 @@ def rwRootBasic (n₀ a₀ b₀ : Q(ℤ)) (pf : Q($a₀ ≡ $b₀ [ZMOD $n₀]))
     else
       return none
 
-def rwRootAdvanced (eqn : Expr) (discharger : TSyntax ``discharger) : RwRoot := fun n e => do
+def rwRootAdvanced (eqn : Expr) (ref : IO.Ref (List MVarId)) : RwRoot := fun n e => do
   let thm ← inferType eqn -- the statement that `eqn` proves
   let (mvars, _, body) ← forallMetaTelescope thm -- the body of the statement
   let ⟨1, ~q(Prop), ~q($lhs ≡ $rhs [ZMOD $n'])⟩ ← inferTypeQ body | throwError "Expected the equation to be of the form lhs ≡ rhs [ZMOD $mod]"
   match ← isDefEqQ (u := 1) n n', ← isDefEqQ (u := 1) lhs e with
   | .defEq _, .defEq _ =>
-    for mvar in mvars do
-      let mvarId := mvar.mvarId!
-      unless ← mvarId.isAssigned do
-        let ⟨[], _⟩ ← Elab.runTactic mvarId discharger | throwError "Goal {mvarId} not closed by discharger."
+    ref.modify (· ++ mvars.toList.map (·.mvarId!))
     return some ⟨rhs, mkAppN eqn (← mvars.mapM instantiateMVars)⟩
   | _, _ => return none
 
@@ -154,7 +151,8 @@ elab "rw_mod " d?:(discharger)? t:term loc?:(location)? : tactic =>
     | some loc => expandLocation loc
     | none => Location.targets #[] true
     let pf ← elabTerm t none
-    let rwRoot := rwRootAdvanced pf d
+    let ref ← IO.mkRef []
+    let rwRoot := rwRootAdvanced pf ref
     -- let rwRoot ← match t.app3? `Int.ModEq with
     -- | some (n,a,b) => pure <| (rwRootBasic n a b pf)
     -- | none => throwError "mod_rw must be provided with a proof of a statement of the form a ≡ b [ZMOD n]"
@@ -162,6 +160,8 @@ elab "rw_mod " d?:(discharger)? t:term loc?:(location)? : tactic =>
       (rwModLocalDecl rwRoot)
       (rwModTarget rwRoot)
       (fun _ ↦ logInfo "push_neg couldn't find a negation to push")
+
+    appendGoals (← ref.get)
 
 example (a b c d n : ℤ) (h : b + c * d ≡ d + b * b [ZMOD n])
 (eq : a ≡ b [ZMOD n])
