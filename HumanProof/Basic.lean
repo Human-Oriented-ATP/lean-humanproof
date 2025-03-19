@@ -30,6 +30,8 @@ macro_rules
 end Notation
 
 
+initialize registerTraceClass `box_proof
+
 /-
 
 TODO: simplifications in Box
@@ -218,7 +220,6 @@ def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM 
 def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List PathItem)) := do
   setGoals []
   let (box, s) ← (go box).run [] |>.run {}
-  -- liftMetaM <| logInfo m! "renamed box: {← box.show}"
 
   if (← getGoals).isEmpty then
     if let some proof ← box.getResult then
@@ -541,9 +542,9 @@ def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.Has
     let goalsBefore ← getGoals
     evalTactic tactic
     let goalsAfter ← getGoals
-    liftMetaM <| logInfo m! "after tactic: {← box.show}"
+    trace[box_proof] "after tactic: {← box.show}"
     let box ← updateBox box goalsBefore addresses
-    liftMetaM <| logInfo m! "after update: {← box.show}"
+    trace[box_proof] "after update: {← box.show}"
     return box
   | _ => throwUnsupportedSyntax
 
