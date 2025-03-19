@@ -1,178 +1,8 @@
-import Lean
+import HumanProof.Defs
 
-namespace HumanProof
+namespace HumanProof.Box
 
-open Lean Meta
-
-section Notation
-
-syntax:10 term:10 "%." noWs ident term:max : term
-
-macro_rules
-| `($struct %.$field:ident $f) => `({ $struct with $field:ident := $f $struct.$field })
-
-syntax ident ":=." noWs ident term : doElem
-
-macro_rules
-| `(doElem| $var:ident :=.$field:ident $f) => `(doElem| $var:ident := $var %.$field $f)
-
-/-- test -/
-syntax ident ":>" term : doElem
-
-macro_rules
-| `(doElem| $var:ident :> $f) => `(doElem| $var:ident := $f $var)
-
-syntax ident ":->" term : doElem
-
-macro_rules
-| `(doElem| $var:ident :-> $f:term) => `(doElem| $var:ident ← $f:term $var)
-
-end Notation
-
-
-initialize registerTraceClass `box_proof
-
-/-
-
-TODO: simplifications in Box
-
-- remove metaVar binders when they aren't used
-- Propagate solved boxes in `.forallB`, `.haveB`, `or` (either side), `.and` (value)
-- Reduce `.and` (body):
-  - `let x := box; ▸ x` ↦ `box`
-  - `let x := (let y := box; ▸ g y); ▸ f x` ↦ `let y := box; ▸ f (g y)`
-
--/
-
-inductive Box where
-| forallB (decl : LocalDecl) (body : Box) (hidden : Bool := false)
-| metaVar (mvarId : MVarId) (name : Name) (type : Expr) (body : Box)
-| result (r : Expr)
-| and (decl : LocalDecl) (value body : Box)
-| or (inl : Box) (inr : Box)
-| haveB (decl : LocalDecl) (value : Expr) (body : Box)
-deriving Inhabited
-
-def Box.show (box : Box) : MetaM (MessageData) := do
-  match box with
-  | forallB decl body _hidden =>
-    withExistingLocalDecls [decl] do
-      addMessageContext m! "∀ ({decl.userName} : {decl.type}),\n{← body.show}"
-  | metaVar mvarId _name type body => do
-    -- modifyMCtx (·.addExprMVarDeclExp mvarId name (← getLCtx) (← getLocalInstances) type (kind := .syntheticOpaque))
-    addMessageContext m! "{mkMVar mvarId} : {type},\n{← body.show}"
-  | result r => return m! "▸ {r}"
-  | and decl value body =>
-    let value ← value.show
-    withExistingLocalDecls [decl] do
-      addMessageContext m! "And {decl.userName} : {decl.type} := {value}\n{← body.show}"
-  | or inl inr =>
-    return m! "{← inl.show} Or\n{← inr.show}"
-  | haveB decl value body =>
-    withExistingLocalDecls [decl] do
-      addMessageContext m! "Have {decl.userName} : {decl.type} := {value}\n{← body.show}"
-
-namespace Box
-
-def _root_.Lean.LocalDecl.mkLambda (decl : LocalDecl) (e : Expr) : Expr :=
-  let e := e.abstract #[decl.toExpr]
-  .lam decl.userName decl.type e decl.binderInfo
-
-def _root_.Lean.LocalDecl.mkLet (decl : LocalDecl) (e value : Expr) : Expr :=
-  let e := e.abstract #[decl.toExpr]
-  Lean.mkLet decl.userName decl.type value e
-
-def getResults (box : Box) : MetaM (Array Expr) := do
-  let results ← go box
-  return results.filter (!·.hasMVar)
-where
-  go : Box → MetaM (Array Expr)
-  | .forallB decl body _hidden =>
-    withExistingLocalDecls [decl] do
-    if !decl.type.hasMVar then
-      return (← go body).map decl.mkLambda
-    else
-      return #[]
-  | .metaVar _ _ _ body => go body
-  | .result r => if r.hasMVar then return #[] else return #[r]
-  | .and decl value body => do
-    (← go value).flatMapM fun value => withExistingLocalDecls [decl] do
-      return (← go body).map (decl.mkLet · value)
-  | .or inl inr => return (← go inl) ++ (← go inr)
-  | .haveB decl value body => withExistingLocalDecls [decl] do
-    (← go body).mapM fun e => do
-      let f := decl.mkLambda e
-      let ety ← inferType e
-      let α ← inferType value
-      let β := decl.mkLambda ety
-      let u1 ← getLevel α
-      let u2 ← getLevel ety
-      return mkAppN (.const ``letFun [u1, u2]) #[α, β, value, f]
-
-def getResult (box : Box) : MetaM (Option Expr) := do
-  let results ← box.getResults
-  if h : results.size ≠ 0 then
-    return results[0]
-  else
-    return none
-
--- TODO: remove some unused arguments from the constructors
-inductive PathItem where
-  | forallB (decl : LocalDecl) (hidden : Bool)
-  | metaVar (mvarId : MVarId) (name : Name) (type : Expr)
-  | andL (decl : LocalDecl) (body : Box)
-  | andR (decl : LocalDecl) (value : Box)
-  | imaginaryAnd (fvarId : FVarId)
-  | orL (inr : Box)
-  | orR (inl : Box)
-  | haveB (decl : LocalDecl) (value : Expr)
-
-def PathItem.toMessageData : PathItem → MessageData
-  | forallB decl _hidden => m!"forallB {decl.userName} : {decl.type}"
-  | metaVar _mvarId _name type => m!"metaVar {type}"
-  | andL _decl _body => m!"andL"
-  | andR decl _value => m!"andR {decl.type}"
-  | imaginaryAnd fvarId => m!"imaginary and for {mkFVar fvarId}"
-  | orL _inr => m!"orL"
-  | orR _inl => m!"orR"
-  | haveB decl value => m!"haveB {decl.userName} : {decl.type}, value: {value}"
-
-instance : ToMessageData PathItem := ⟨PathItem.toMessageData⟩
-
-instance : BEq PathItem where
-  beq
-    | .forallB .., .forallB ..
-    | .metaVar .., .metaVar ..
-    | .andL .., .andL ..
-    | .andR .., .andR ..
-    | .orL .., .orL ..
-    | .orR .., .orR ..
-    | .haveB .., .haveB .. => true
-    | .imaginaryAnd fvarId, .imaginaryAnd fvarId' => fvarId == fvarId'
-    | _, _ => false
-
-instance : Hashable PathItem where
-  hash
-    | .forallB .. => 0
-    | .metaVar .. => 1
-    | .andL ..    => 2
-    | .andR ..    => 3
-    | .orL ..     => 4
-    | .orR ..     => 5
-    | .haveB ..   => 6
-    | .imaginaryAnd fvarId => hash fvarId
-
-def PathItem.getLocalDecl? : PathItem → Option LocalDecl
-| .forallB decl _ | andR decl _ | haveB decl _ => decl
-| _ => none
-
-
-/-- Replace all occurrences of a variable with `new`. -/
-def instantiateMVarWith (var e new : Expr) : CoreM Expr :=
-  Core.transform e (post := (if · == var then return .done new else return .continue))
-
-open Elab Tactic
-
+open Lean Meta Elab Tactic
 
 section ToTacticState
 
@@ -183,19 +13,23 @@ structure CreateTacticState where
 
 abbrev CreateTacticM := ReaderT (List PathItem) StateRefT CreateTacticState TacticM
 
-def _root_.Lean.Expr.replaceVars (eIn : Expr) : CreateTacticM Expr := do
+def _root_.Lean.Expr.replaceVars (eIn : Expr) (throw : Bool := true): CreateTacticM Expr := do
   Core.transform eIn (pre := fun e => do
     match e with
     | .mvar mvarId =>
       if let some e := (← get).mvarReplacements[mvarId]? then
         return .done e
       else
-        throwError "Meta variable {mvarId} isn't bound :((( in {eIn}"
+        if throw then
+          throwError "Meta variable {mvarId} isn't bound :((( in {eIn}"
+        return .continue
     | .fvar fvarId =>
       if let some e := (← get).fvarReplacements[fvarId]? then
         return .done e
       else
-        throwError "Free variable {e} isn't bound :((("
+        if throw then
+          throwError "Free variable {e} isn't bound :((( in {eIn}"
+        return .continue
     | _ => return .continue)
 
 def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM α) (hidden : Bool := false) : LocalDecl → CreateTacticM α
@@ -219,7 +53,7 @@ def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM 
 
 def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List PathItem)) := do
   setGoals []
-  let (box, s) ← (go box).run [] |>.run {}
+  let (box, s) ← (go true box).run [] |>.run {}
 
   if (← getGoals).isEmpty then
     if let some proof ← box.getResult then
@@ -229,36 +63,41 @@ def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVa
   else
     return (box, s.addresses)
 where
-  go : Box → (ReaderT (List PathItem) StateRefT CreateTacticState TacticM) Box
+  go (inMain : Bool) : Box → (ReaderT (List PathItem) StateRefT CreateTacticState TacticM) Box
   | forallB decl body hidden => do
       decl.withReplaceVars (hidden := hidden) fun decl => do
-        let body ← withReader (.forallB decl hidden :: ·) do go body
+        let body ← withReader (.forallB decl hidden :: ·) do go inMain body
         return .forallB decl body hidden
   | metaVar mvarId name type body => do
     let type ← type.replaceVars
     let mvar ← mkFreshExprMVar type (userName := name) (kind := .syntheticOpaque)
     modify (· %.mvarReplacements (·.insert mvarId mvar))
     let mvarId := mvar.mvarId!
-    pushGoal mvarId
-    let address := (← read).reverse
-    modify (· %.addresses (·.insert mvarId address))
-    .metaVar mvarId name type <$> withReader (.metaVar mvarId name type :: ·) do go body
+    if inMain then
+      pushGoal mvarId
+      let address := (← read).reverse
+      modify (· %.addresses (·.insert mvarId address))
+    .metaVar mvarId name type <$> withReader (.metaVar mvarId name type :: ·) do go inMain body
   | result r => return .result (← r.replaceVars)
   | and decl value body => do
     let decl ← decl.withReplaceVars pure
-    let value ← withReader (.andL decl body :: ·) do go value
-    let body ← withReader (.andR decl body :: ·) do go body
+    let value ← withReader (.andL decl body :: ·) do go inMain value
+    let body ← withReader (.andR decl body :: ·) do go inMain body
     return .and decl value body
   | or inl inr => do
     -- We should think about how to name the goals so that it helps the user.
-    let inl ← withReader (.orL inr :: ·) do go inl
-    let inr ← withReader (.orR inl :: ·) do go inr
+    let inl ← withReader (.orL inr :: ·) do go inMain inl
+    let inr ← withReader (.orR inl :: ·) do go inMain inr
     return .or inl inr
   | haveB decl value body => do
     let value ← value.replaceVars
     decl.withReplaceVars fun decl => do
-      let body ← withReader (.haveB decl value :: ·) do go body
+      let body ← withReader (.haveB decl value :: ·) do go inMain body
       return .haveB decl value body
+  | savedBox saved body => do
+    let saved ← go false saved
+    let body ← withReader (.savedBox saved :: ·) <| go inMain body
+    return savedBox saved body
 
 end ToTacticState
 
@@ -429,11 +268,6 @@ where
       | _ => return .continue)
 
 
-nonrec def _root_.Lean.LocalDecl.instantiateMVars : LocalDecl → MetaM LocalDecl
-  | .cdecl index fvarId userName type bi kind           => return .cdecl index fvarId userName (← instantiateMVars type) bi kind
-  | .ldecl index fvarId userName type value nonDep kind => return .ldecl index fvarId userName (← instantiateMVars type) (← instantiateMVars value) nonDep kind
-
-
 abbrev UpdateBoxM α := ReaderT UpdateBoxContext MetaM α
 
 def withPathItem {α} (item : PathItem) : UpdateBoxM α → UpdateBoxM α :=
@@ -446,7 +280,7 @@ where
   go (box : Box) : UpdateBoxM Box := do
     let mut box : Box ← (do match box with
       | .forallB decl body hidden =>
-        let decl ← decl.instantiateMVars
+        let decl ← decl.mapM instantiateMVars
         let body ← withPathItem (.forallB decl hidden) <| go body
         return .forallB decl body hidden
       | .metaVar mvarId name type body =>
@@ -455,7 +289,7 @@ where
         return .metaVar mvarId name type body
       | .result r => return .result (← instantiateMVars r)
       | .and decl value body =>
-        let decl ← decl.instantiateMVars
+        let decl ← decl.mapM instantiateMVars
         let value ← withPathItem (.andL decl body) <| go value
         let body ← withPathItem (.andR decl value) <| go body
         return .and decl value body
@@ -464,10 +298,13 @@ where
         let inr ← withPathItem (.orR inl) <| go inr
         return .or inl inr
       | .haveB decl value body =>
-        let decl ← decl.instantiateMVars
+        let decl ← decl.mapM instantiateMVars
         let value ← instantiateMVars value
         let body ← withPathItem (.haveB decl value) <| go body
-        return .haveB decl value body)
+        return .haveB decl value body
+      | .savedBox saved box =>
+        let box ← withPathItem (.savedBox saved) <| go box
+        return .savedBox saved box)
 
     let { removeMVar, newMVars, newAnds, newHaves, address } ← read
     if let some mvarIds := removeMVar[address]? then
@@ -484,7 +321,7 @@ where
         box := .metaVar mvarId userName type box
     if let some newAnds := newAnds[address]? then
       for (decl, fvars, mvarId) in newAnds do
-        let decl ← decl.instantiateMVars
+        let decl ← decl.mapM instantiateMVars
         let value := .result (← instantiateMVars (.mvar mvarId))
         let value ← mvarId.withContext do fvars.foldrM (init := value) fun fvar box =>
           return Box.forallB (← fvar.fvarId!.getDecl) box (hidden := false)
@@ -493,19 +330,75 @@ where
 
     if let some haves := newHaves[address]? then
       for (decl, value) in haves do
-        let decl ← decl.instantiateMVars
+        let decl ← decl.mapM instantiateMVars
         let value ← instantiateMVars value
         box := .haveB decl value box
     return box
 
 end FixTacticState
 
+section SavedBox
+
+def makeBackup (box : Box) : MetaM Box :=
+  match box with
+  | .forallB decl body hidden => return .forallB decl (← makeBackup body) hidden
+  | .haveB decl value body    => return .haveB decl value (← makeBackup body)
+  | .savedBox saved body      => return .savedBox saved (← makeBackup body)
+  | .result r                 => throwError "couldn't make a back-up"
+  | _ => return .savedBox box box
+
+
+partial def Zipper.zipUntilBackup (zipper : Zipper) (skip : Nat := 0) : Zipper × Option Box :=
+  if let some (item, zipper) := zipper.up then
+    if let .savedBox saved := item.item then
+      match skip with
+      | 0      => (zipper, saved)
+      | skip+1 => zipper.zipUntilBackup skip
+    else
+      zipper.zipUntilBackup skip
+  else
+    (zipper, none)
+
+def mkNewLocalDecl (name : Name) (type : Expr) : MetaM LocalDecl := do
+  let fvarId ← mkFreshFVarId
+  return LocalDecl.cdecl default fvarId name type .default .default
+
+
+theorem Classical_ite (q : Prop) (p : Prop) (caseFalse : ¬ p → q) (caseTrue : p → q) : q := by
+  by_cases h : p <;> simp [*]
+
+def useBackup (box : Box) (address : List PathItem) (hypName : Name) : MetaM Box := do
+  let zipper ← Zipper.unzip box address
+  let .metaVar mvarId _ type box := zipper.cursor | throwError "expected a meta variable box: {← box.show}"
+  let decl ← mkNewLocalDecl hypName type
+  mvarId.assign decl.toExpr
+  let box ← box.mapM instantiateMVars
+  let (zipper, some boxFalse) := { zipper with cursor := box }.zipUntilBackup 0 | throwError "couldn't find a saved state to backup to"
+  zipper.withLCtx do withExistingLocalDecls [decl] do
+  -- let boxType ← zipper.withLCtx do withExistingLocalDecls [decl] do inferType boxTrue
+  let boxFalse := .forallB (← mkNewLocalDecl hypName (mkNot type)) boxFalse
+  let boxTrue := .forallB decl zipper.cursor
+  let caseFalse ← mkNewLocalDecl `caseFalse (← boxFalse.inferType)
+  let caseTrue  ← mkNewLocalDecl `caseTrue  (← boxTrue.inferType)
+  let proof := mkApp4 (.const ``Classical_ite []) (← inferType zipper.cursor) type caseFalse.toExpr caseTrue.toExpr
+  let box : Box :=
+    .and caseFalse boxFalse <|
+    .and caseTrue boxTrue <|
+    .result proof
+  return { zipper with cursor := box }.zip
+
+end SavedBox
+
+
 section RunTactic
 
 open Elab Parser Tactic
 
 declare_syntax_cat box_tactic
+
 syntax (name := lean_tactic) tactic : box_tactic
+syntax "backup" : box_tactic
+syntax "admit_goal" ident (num)? : box_tactic
 
 @[inline] def boxTacticParser (rbp : Nat := 0) : Parser :=
   categoryParser `box_tactic rbp
@@ -513,16 +406,8 @@ syntax (name := lean_tactic) tactic : box_tactic
 def boxTacticSeq1Indented : Parser := leading_parser
   sepBy1IndentSemicolon boxTacticParser
 
-def boxTacticSeqBracketed : Parser := leading_parser
-  "{" >> sepByIndentSemicolon boxTacticParser >> ppDedent (ppLine >> "}")
-
 def boxTacticSeq := leading_parser
-  ppIndent (boxTacticSeqBracketed <|> boxTacticSeq1Indented)
-
-def evalBoxTactic (stx : TSyntax `box_tactic) : TacticM Unit := do
-  match stx with
-  | `(box_tactic| $tac:tactic) => evalTactic tac
-  | _ => throwUnsupportedSyntax
+  ppIndent (boxTacticSeq1Indented)
 
 syntax (name := box_proof) "box_proof" ppLine boxTacticSeq : tactic
 
@@ -536,22 +421,30 @@ def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
   return (lctxArr.map LocalDecl.toExpr, box)
 
 
-def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.HashMap MVarId (List PathItem)) : TacticM Box := withRef tactic do
+def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.HashMap MVarId (List PathItem)) : TacticM Box := do
+  withTacticInfoContext tactic do
   match tactic with
+  | `(box_tactic| backup) => makeBackup box
+  | `(box_tactic| admit_goal $h $[$n]?) =>
+    let n := n.elim 0 (·.getNat)
+    let h := h.getId
+    let some goal := (← getGoals)[n]? | throwError "index {n} is out of bounds"
+    useBackup box addresses[goal]! h
   | `(box_tactic| $tactic:tactic) =>
     let goalsBefore ← getGoals
     evalTactic tactic
-    let goalsAfter ← getGoals
+    let _goalsAfter ← getGoals
     trace[box_proof] "after tactic: {← box.show}"
-    let box ← updateBox box goalsBefore addresses
-    trace[box_proof] "after update: {← box.show}"
-    return box
+    updateBox box goalsBefore addresses
   | _ => throwUnsupportedSyntax
 
 def boxLoop (box : Box) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Expr TacticM Box := do
-  let box ← tactics.getElems.foldlM (init := box) fun box (tactic : TSyntax `box_tactic) => do
+  let box ← tactics.getElems.foldlM (init := box) fun box (tactic : TSyntax `box_tactic) => withRef tactic do
     let (box, addresses) ← withRef tactic do createTacticState box
-    runBoxTactic box tactic addresses
+    let box ← runBoxTactic box tactic addresses
+    trace[box_proof] "after update: {← box.show}"
+    return box
+
   let (box, _addresses) ← createTacticState box
   return box
 
@@ -567,6 +460,7 @@ def boxProofElab : Tactic
 
     match ← boxLoop box tactics with
     | .error proof =>
+      trace[box_proof]"proof term{indentExpr proof}"
       mainGoal.assign (mkAppN proof lctxArr)
       -- mainGoal.withContext <| logInfo m!"Done, with proof term {indentExpr proof}"
     | .ok box =>
@@ -574,6 +468,8 @@ def boxProofElab : Tactic
   | _ => throwUnsupportedSyntax
 
 end RunTactic
+
+-- set_option trace.box_proof true
 
 section Test
 
@@ -592,6 +488,9 @@ example (n m k : Nat) (h: n = m) (h' : m = k) : n = k ∧ n = k := by
 
 example (x y : Int) : True ∧ ∀ a b c : Nat, a = b → a = c → b = c := by
   box_proof
+    backup
+    admit_goal h 0
+    skip
     constructor
     skip
     intro a
@@ -604,69 +503,18 @@ example (x y : Int) : True ∧ ∀ a b c : Nat, a = b → a = c → b = c := by
     exact g
     trivial
 
+example (p : Prop) (h : ¬ p → p) : p := by
+  box_proof
+    backup
+    apply h
+    admit_goal h'
+    rw [Classical.not_not] at h'
+    exact h'
+
 
 
 end Test
 
-section Elab
-
-
-end Elab
-
-
 end Box
 
 end HumanProof
-
-
-
-
-/-
-?a : Nat
-h : ?a = 1
-?b : Nat
-
-⊢
-
--/
-
-/-
-let ?a := ?b + 1
--/
--- open Lean Meta Elab
-
--- elab "test" e:tactic : tactic => do
---   -- let e ← Term.elabTerm e none
---   -- logInfo m! "{e}"
---   let mvarId ← Tactic.getMainGoal
---   Tactic.evalTactic e
---   let mvarIdNew ← Tactic.getMainGoal
---   liftMetaM do
---   logInfo m! "{repr mvarId}; {← instantiateMVars <| Expr.mvar mvarId}"
---   logInfo m! "{repr mvarIdNew}; {← instantiateMVars <| Expr.mvar mvarIdNew}"
---   let (_, mvars) ← collectMVars (.mvar mvarId) |>.run {}
---   for mvar in mvars.result do
---     logInfo m! "{repr mvar}; {← instantiateMVars <| Expr.mvar mvar}; {mvar}"
---     if let some x ← getDelayedMVarAssignment? mvar then
---       logInfo m! "delayed assigment of {Expr.mvar mvar}: {Expr.mvar x.mvarIdPending}"
--- set_option pp.instantiateMVars false
--- example {P : α → Prop} (x : α) (y : α) {β : Type} (h': True) (h : α = β) (z : Nat) : P x := by
---   -- -- clear y
---   -- rw [h] at y
---   test rw [h] at y
--- #check Exists.casesOn
--- example {P : α → Prop} (h : ∃ x, P x) (a : Nat) : False := by
---   test cases h
-
--- example {α β : Nat} (P : Nat → Prop) (h : P α) (h' : α = β) : False := by
---   test rw [h'] at h
-
--- example {α β : Nat} (h' : 15 = β) (h : True) : False := by
---   test induction β generalizing h
-
--- example {p q : Prop} (h : p) (g : False) : q := by
---   contrapose h
-
-
--- fun x => ?f x
--- ?f
