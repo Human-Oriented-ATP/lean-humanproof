@@ -240,7 +240,6 @@ where
         if let some { mvarIdPending, fvars } ← getDelayedMVarAssignment? mvarId then
           mvarIdPending.withContext do
             let allArgs := e.getAppArgs
-            let mut args : Array (LocalDecl × Expr) := #[]
             let mut i := 0
             repeat
               if h : fvars.size ≤ i then
@@ -251,13 +250,12 @@ where
               let some arg := allArgs[i]? |
                 mkNewAnd fvars i mvarId mvarIdPending origin
                 break
-              if arg.isFVar then
-                continue
               if arg.hasLooseBVars then
-                mkNewAnd fvars i mvarId mvarIdPending origin; break
-              let fvarDecl ← getFVarLocalDecl fvar
-              modify (· %.newHaves (·.push (fvarDecl, arg, origin)))
-              args := args.push (← getFVarLocalDecl fvar, arg)
+                mkNewAnd fvars i mvarId mvarIdPending origin
+                break
+              unless arg.isFVar do
+                let fvarDecl ← getFVarLocalDecl fvar
+                modify (· %.newHaves (·.push (fvarDecl, arg, origin)))
               i := i + 1
             return .continue -- .visit (← instantiateMVars e)
         else
@@ -344,7 +342,7 @@ def makeBackup (box : Box) : MetaM Box :=
   | .forallB decl body hidden => return .forallB decl (← makeBackup body) hidden
   | .haveB decl value body    => return .haveB decl value (← makeBackup body)
   | .savedBox saved body      => return .savedBox saved (← makeBackup body)
-  | .result r                 => throwError "couldn't make a back-up"
+  | .result _                 => throwError "couldn't make a back-up"
   | _ => return .savedBox box box
 
 
@@ -512,6 +510,11 @@ example (p : Prop) (h : ¬ p → p) : p := by
 
 
 
+example (a b c : Prop) (ha : a) (hb : b) (h : a → b → c) : c := by
+  box_proof
+    apply h
+    exact hb
+    exact ha
 end Test
 
 end Box
