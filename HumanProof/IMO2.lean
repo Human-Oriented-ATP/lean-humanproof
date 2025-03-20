@@ -1,5 +1,5 @@
 import HumanProof.Basic
-import Mathlib.Tactic
+import Mathlib
 import HumanProof.RwMod
 
 #check Nat.totient
@@ -76,5 +76,6 @@ example (a b : ℤ) (ha : a > 1) (hb : b > 1) : ∃ M : ℤ, M > 1 ∧ ∀ n0 : 
   case' goal2 =>
     apply mul_right_cancel_mod a ?goal1.h_coprime
     simp [← pow_succ]
+    rw_mod pow_totient_multiple_eq_one
   -- let HH : 1+1 = 2 := rfl
   skip
