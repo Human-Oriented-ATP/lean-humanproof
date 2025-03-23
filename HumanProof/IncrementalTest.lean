@@ -1,0 +1,49 @@
+import HumanProof.Incremental
+
+set_option pp.rawOnError true
+
+example : True := by
+  my_scope
+    let x := 5
+    sleep 1000
+    sleep 1000
+    set 1
+    sleep 1000
+    echo "expect 1"
+    get
+    sleep 1000
+    set 2
+    sleep 1000
+    echo "expect 2"
+    get
+    sleep 1000
+    set 3
+    sleep 1000
+    echo "expect 3"
+    get
+    sleep 1000
+    set 4
+    sleep 1000
+    echo "expect 4..."
+    get
+    sleep 1000
+    set 5
+    sleep 1000
+    echo "expect 5"
+    get
+    sleep 1000
+    set 6
+    sleep 1000
+    echo "expect 6 wow"
+    get
+    sleep 1000
+    set 7
+    sleep 1000
+    echo "expect 7"
+    get
+    sleep 1000
+    set 8
+    sleep 1000
+    echo "expect 8"
+    get
+    trivial
