@@ -25,7 +25,7 @@ where
   go (lo hi : Nat) (h_lo : lo < hi := by omega) (h_hi : hi ≤ atoms.size := by omega) : Q(BinTree $α) :=
     let mid := (lo + hi)/2
     if h : lo = mid then
-      atoms[lo]
+      q(leaf $(atoms[lo]))
     else
       let l := go lo mid
       let r := go mid hi

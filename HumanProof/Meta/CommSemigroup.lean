@@ -1,18 +1,82 @@
 import HumanProof.Meta.BinTree
+import HumanProof.Meta.Abstraction
+import HumanProof.Meta.Lemmas
 import Mathlib.Logic.Basic
 import Mathlib.Util.AtomM
 
-universe u v
+open Lean Qq
 
-class CommSemigroup (α : Type u) extends Add α where
-  add_assoc : ∀ a b c : α, (a + b) + c = a + (b + c)
-  add_comm : ∀ a b : α, a + b = b + a
+initialize registerTraceClass `semi_group
 
-variable {α : Type u}
+namespace Abstraction
 
-theorem CommSemigroup.add_left_comm [inst : CommSemigroup α] (a b c : α) :
-    a + (b + c) = b + (a + c) := by
-  rw [← inst.add_assoc, ← inst.add_assoc, inst.add_comm a b]
+class CommSemigroupClass (α : Type*) where
+  add : α → α → α
+  add_assoc : ∀ a b c : α, add (add a b) c = add a (add b c)
+  add_comm : ∀ a b : α, add a b = add b a
+
+local instance instAdd {α : Type*} [CommSemigroupClass α] : Add α where
+  add := CommSemigroupClass.add
+
+local instance instMul {α : Type*} [CommSemigroupClass α] : Mul α where
+  mul := CommSemigroupClass.add
+
+variable {u : Level}
+
+inductive CommSemigroup {α : Q(Type $u)} (inst : Q(CommSemigroupClass $α)) (ε : Type) where
+| add (a b : CommSemigroup inst ε)
+| leaf (a : ε)
+deriving Inhabited
+
+namespace CommSemigroup
+
+section Denote
+
+variable {α : Q(Type $u)} {ε : Type} {inst : Q(CommSemigroupClass $α)} (add : Q($α → $α → $α)) [Denote α ε]
+
+def denote : CommSemigroup inst ε → Q($α)
+  | .add a b => q($add $(a.denote) $(b.denote))
+  | .leaf a => Denote.denote a
+
+instance : Denote α (CommSemigroup inst ε) := ⟨CommSemigroup.denote q(CommSemigroupClass.add)⟩
+
+end Denote
+
+
+section Reify
+
+open Meta
+
+variable {m : Type → Type} [Monad m] [MonadLiftT MetaM m] [MonadControlT MetaM m] [MonadError m]
+   {α : Q(Type $u)} {ε : Type} [Inhabited ε] [Reify α ε m] {inst : Q(CommSemigroupClass $α)}
+
+partial def reifyAdd [Inhabited ε] (e : Q($α)) : m (CommSemigroup inst ε) := do
+  let els := return .leaf (← reify e)
+  let .const n _ := (← whnfR e).getAppFn | els
+  match n with
+  | ``HAdd.hAdd | ``Add.add => match e with
+    | ~q($a + $b) => return .add (← reifyAdd a) (← reifyAdd b)
+    | _ => els
+  | _ => els
+
+-- instance : Reify α (CommSemigroup α q(HAdd.hAdd) ε) m := ⟨reifyAdd⟩
+
+partial def reifyMul [Inhabited ε] (e : Q($α)) : m (CommSemigroup inst ε) := do
+  let els := return .leaf (← reify e)
+  let .const n _ := (← whnfR e).getAppFn | els
+  match n with
+  | ``HMul.hMul | ``Mul.mul => match e with
+    | ~q($a + $b) => return .add (← reifyMul a) (← reifyMul b)
+    | _ => els
+  | _ => els
+
+-- instance : Reify α (CommSemigroup α q(HMul.hMul) ε) m := ⟨reifyMul⟩
+
+end Reify
+
+
+
+namespace Internal
 
 inductive CommSemigroupExpr where
 | add  : CommSemigroupExpr → CommSemigroupExpr → CommSemigroupExpr
@@ -20,35 +84,24 @@ inductive CommSemigroupExpr where
 
 namespace CommSemigroupExpr
 
-variable {n : Nat}
+theorem add_comm {α : Type*} [inst : CommSemigroupClass α] (a b : α) : a + b = b + a :=
+  inst.add_comm a b
 
--- class AbstractedExpr (α : Type u) (ι : outParam (Type v)) where
---   eval : (ι → Expr) → α → Expr
+theorem add_assoc {α : Type*} [inst : CommSemigroupClass α] (a b c : α) : a + b + c = a + (b + c) :=
+  inst.add_assoc a b c
+
+theorem add_left_comm {α : Type*} [inst : CommSemigroupClass α] (a b c : α) : a + (b + c) = b + (a + c) := by
+  rw [← add_assoc, ← add_assoc, add_comm a b]
+
 section EquivOfCount
 
 def count (i : Nat) : CommSemigroupExpr → Nat
   | .add a b => a.count i + b.count i
   | .atom j => if j == i then 1 else 0
 
-noncomputable def toSortedList : CommSemigroupExpr → List Nat
+def toSortedList : CommSemigroupExpr → List Nat
   | .add a b => a.toSortedList.merge b.toSortedList (· ≤ ·)
   | .atom i => [i]
-
-theorem _root_.List.merge_ne_nil_of_right {le} {xs ys : List α} (hy : ys ≠ []) : xs.merge ys le ≠ [] := by
-  cases xs with
-  | nil => simp [hy]
-  | cons =>
-    cases ys with
-    | nil => contradiction
-    | cons => unfold List.merge; split <;> simp
-
-theorem _root_.List.merge_ne_nil_of_left {le} {xs ys : List α} (hx : xs ≠ []) : xs.merge ys le ≠ [] := by
-  cases xs with
-  | nil => contradiction
-  | cons =>
-    cases ys with
-    | nil => simp
-    | cons => unfold List.merge; split <;> simp
 
 @[simp]
 theorem toSortedList_ne_nil (e : CommSemigroupExpr) : e.toSortedList ≠ [] := by
@@ -56,20 +109,6 @@ theorem toSortedList_ne_nil (e : CommSemigroupExpr) : e.toSortedList ≠ [] := b
   | atom => simp
   | add a b ih_a ih_b =>
     exact List.merge_ne_nil_of_right ih_b
-
-
-
-@[simp]
-theorem _root_.List.count_merge [BEq α] {le : α → α → Bool} (l₁ l₂ : List α) (a : α) :
-    (l₁.merge l₂ le).count a = l₁.count a + l₂.count a := by
-  induction l₁ generalizing l₂ with
-  | nil => simp
-  | cons x l₁ ih₁ =>
-    induction l₂ with
-    | nil => simp
-    | cons y l₂ ih₂ =>
-      unfold List.merge
-      split <;> simp only [List.count_cons, ih₁, ih₂] <;> split <;> omega
 
 theorem count_toSortedList_eq_count (e : CommSemigroupExpr) (i : Nat) :
     e.toSortedList.count i = e.count i := by
@@ -88,19 +127,21 @@ theorem sorted_toSortedList (e : CommSemigroupExpr) :
     · apply ih_a
     · apply ih_b
 
-def eval [inst : CommSemigroup α] (eval_atom : Nat → α) : CommSemigroupExpr → α
+variable {α : Type*}
+
+def eval [CommSemigroupClass α] (eval_atom : Nat → α) : CommSemigroupExpr → α
   | .add a b => a.eval eval_atom + b.eval eval_atom
   | .atom i => eval_atom i
 
-theorem lift_add [inst : CommSemigroup α] (eval_atom : Nat → α) (e₁ e₂ : CommSemigroupExpr) :
+theorem lift_add [CommSemigroupClass α] (eval_atom : Nat → α) (e₁ e₂ : CommSemigroupExpr) :
     (e₁.add e₂).eval eval_atom = e₁.eval eval_atom + e₂.eval eval_atom :=
   rfl
 
 def Equiv (e₁ e₂ : CommSemigroupExpr) : Prop :=
-  ∀ {α : Type u} [CommSemigroup α] (eval_atom : Nat → α),
+  ∀ {α : Type*} [CommSemigroupClass α] (eval_atom : Nat → α),
     e₁.eval eval_atom = e₂.eval eval_atom
 
-def evalList [inst : CommSemigroup α] (eval_atom : Nat → α) (l : List (Nat)) (hl : l ≠ []) : α :=
+def evalList [CommSemigroupClass α] (eval_atom : Nat → α) (l : List (Nat)) (hl : l ≠ []) : α :=
   match l with
   | a :: l =>
   if h : l = [] then
@@ -108,7 +149,7 @@ def evalList [inst : CommSemigroup α] (eval_atom : Nat → α) (l : List (Nat))
   else
     eval_atom a + evalList eval_atom l h
 
-theorem evalList_merge [inst : CommSemigroup α] (eval_atom : Nat → α) (l₁ l₂ : List (Nat)) (h₁ : l₁ ≠ []) (h₂ : l₂ ≠ []) :
+theorem evalList_merge [CommSemigroupClass α] (eval_atom : Nat → α) (l₁ l₂ : List (Nat)) (h₁ : l₁ ≠ []) (h₂ : l₂ ≠ []) :
     evalList eval_atom (l₁.merge l₂) (List.merge_ne_nil_of_left h₁) = evalList eval_atom l₁ h₁ + evalList eval_atom l₂ h₂ := by
   induction l₁ generalizing l₂ with
   | nil => contradiction
@@ -124,14 +165,14 @@ theorem evalList_merge [inst : CommSemigroup α] (eval_atom : Nat → α) (l₁ 
           List.nil_merge, List.merge_right,
           ↓reduceDIte, reduceCtorEq,
           ne_eq, not_true_eq_false, not_false_eq_true, forall_const, forall_false, forall_true_left] at ih₁ ih₂ ⊢
-      · rw [inst.add_comm]
-      · rw [ih₂, inst.add_left_comm]
-      · rw [ih₁, inst.add_assoc]
-      · rw [inst.add_comm]
-      · rw [ih₁, inst.add_assoc]
-      · rw [ih₂, inst.add_left_comm]
+      · rw [add_comm]
+      · rw [ih₂, add_left_comm]
+      · rw [ih₁, add_assoc]
+      · rw [add_comm]
+      · rw [ih₁, add_assoc]
+      · rw [ih₂, add_left_comm]
 
-theorem evalList_toSortedList [inst : CommSemigroup α] (eval_atom : Nat → α) (e : CommSemigroupExpr) :
+theorem evalList_toSortedList [CommSemigroupClass α] (eval_atom : Nat → α) (e : CommSemigroupExpr) :
     evalList eval_atom e.toSortedList (toSortedList_ne_nil e) = e.eval eval_atom := by
   induction e with unfold eval toSortedList
   | atom i => simp [evalList]
@@ -148,38 +189,6 @@ theorem equiv_of_count_eq (e₁ e₂ : CommSemigroupExpr) (h : ∀ i : Nat, e₁
     simpa [count_toSortedList_eq_count]
 
 end EquivOfCount
-
-/-
-
-  def maxAux (n : Nat) : CommSemigroupExpr → Nat
-    | .add a b =>
-  def max : CommSemigroupExpr → Nat := maxAux 0
-
-  def boundedBy (n : Nat) : CommSemigroupExpr → Prop
-    | .add a b => a.boundedBy n ∧ b.boundedBy n
-    | .atom i => i < n
-
-  def reduceAux (vec : Vector Nat n) (e : CommSemigroupExpr) (h : e.boundedBy n) : Vector Nat n :=
-    match e with
-    | .add a b => b.reduceAux (a.reduceAux vec h.1) h.2
-    | .atom i => vec.set i (vec[i] + 1)
-
-  def reduce (e : CommSemigroupExpr) (n : Nat) (h : e.boundedBy n) : Vector Nat n :=
-    e.reduceAux (.mkVector _ 0) h
-
-  theorem getElem_reduce_eq_count (e : CommSemigroupExpr) (i : Fin n) : (reduce e)[i] = e.count i := by
-    suffices h : ∀ (vec : Vector Nat n), (reduceAux vec e)[i] = vec[i] + e.count i by
-      simpa using h (.mkVector _ 0)
-    induction e with (intro vec; unfold reduceAux count)
-    | atom j => by_cases h : j = i <;> simp (disch := omega) [h]
-    | add a b a_ih b_ih => rw [b_ih, a_ih, Nat.add_assoc]
-
-  theorem equiv_of_reduce_eq (e₁ e₂ : CommSemigroupExpr) (h : e₁.reduce = e₂.reduce) : e₁.Equiv e₂ := by
-    apply equiv_of_count_eq
-    intro i
-    simp only [← getElem_reduce_eq_count]
-    rw [h]
--/
 
 section Decide
 
@@ -238,7 +247,7 @@ theorem count_toList_eq_count (e : CommSemigroupExpr) (i : Nat) : e.toList.count
   | atom j => rw [Nat.add_comm]; by_cases h : j = i <;> simp (disch := symm; assumption) [h]
   | add a b ih_a ih_b => rw [ih_a, ih_b]; omega
 
-theorem isBound_spec {l : List Nat} (h : isBound n l) : ∀ i ∈ l, i < n := by
+theorem isBound_spec {l : List Nat} {n : Nat} (h : isBound n l) : ∀ i ∈ l, i < n := by
   intro i
   induction l with
   | nil => simp
@@ -249,25 +258,8 @@ theorem isBound_spec {l : List Nat} (h : isBound n l) : ∀ i ∈ l, i < n := by
     · exact h.1
     · exact ih h.2 hi
 
-theorem count_eq_zero {l : List Nat} (h : ∀ i ∈ l, i < n) {i : Nat} (hi : n ≤ i) : l.count i = 0 :=
+theorem count_eq_zero {l : List Nat} {n : Nat} (h : ∀ i ∈ l, i < n) {i : Nat} (hi : n ≤ i) : l.count i = 0 :=
   List.count_eq_zero_of_not_mem (mt (h i) (Nat.not_lt.mpr hi))
-
--- theorem splitListBy_between (lo mid hi : Nat) (l : List Nat) (h : ∀ i ∈ l, lo ≤ i ∧ i < hi) :
---     ∀ i ∈ (splitListBy mid l).1, lo ≤ i ∧ i < mid := by
---   unfold splitListBy
---   suffices h : ∀ l₁ l₂, (∀ i ∈ l₁, lo ≤ i ∧ i < mid) → (∀ i ∈ l₂, lo ≤ i ∧ i < mid) →
---       ∀ i ∈ (splitListByAux mid l₁ l₂ l).1, lo ≤ i ∧ i < mid by apply h <;> simp
---   intro l₁ l₂ h₁ h₂ i hi
-
---   induction l with simp [splitListByAux] at hi
---   | nil => exact h₁ i hi
---   | cons a l ih =>
---     by_cases ha : a < mid <;> simp [ha] at hi
---     · sorry
---     · sorry
-
--- theorem splitListBy_bound_1 (lo mid hi : Nat) (l : List Nat) (i : Nat) (hi : i < lo ∨ mid ≤ i) :
-
 
 theorem count_splitListBy_fst (mid : Nat) (l : List Nat) (i : Nat) :
     (splitListBy mid l).fst.count i = if i < mid then l.count i else 0 := by
@@ -360,7 +352,7 @@ theorem equalCountBetween_spec {l₁ l₂ : List Nat} (lo hi fuel : Nat) (h_fuel
       · intro i hi; exact h₁_hi i (mem_of_mem_splitListBy_snd i hi)
       · intro i hi; exact h₂_hi i (mem_of_mem_splitListBy_snd i hi)
 
-theorem Equiv_of_decide (e₁ e₂ : CommSemigroupExpr) (n : Nat) (h : decideEquiv e₁ e₂ n) :
+theorem equiv_of_decide (e₁ e₂ : CommSemigroupExpr) (n : Nat) (h : decideEquiv e₁ e₂ n) :
     Equiv e₁ e₂ := by
   apply equiv_of_count_eq
   intro i
@@ -379,59 +371,79 @@ theorem Equiv_of_decide (e₁ e₂ : CommSemigroupExpr) (n : Nat) (h : decideEqu
 
 end ProveDecide
 
+end CommSemigroupExpr
 
-open Lean Meta Qq Mathlib.Tactic AtomM
+end Internal
 
-partial def ofExpr {u : Level} {α : Q(Type $u)} (inst : Q(CommSemigroup $α)) (e : Q($α)) : AtomM Q(CommSemigroupExpr) := do
-  let els := do
-    let ⟨n, _⟩ ← addAtomQ e
-    let n : Q(Nat) := mkNatLit n
-    return q(CommSemigroupExpr.atom $n)
-  let .const n _ := (← withReducible <| whnf e).getAppFn | els
-  match n with
-  | ``HAdd.hAdd | ``Add.add => match e with
-    | ~q($a + $b) => return q(CommSemigroupExpr.add $(← ofExpr inst a) $(← ofExpr inst b))
-    | _ => els
-  | _ => els
+theorem equiv_of_decide (e₁ e₂ : Internal.CommSemigroupExpr) (n : Nat) (h : e₁.decideEquiv e₂ n) : e₁.Equiv e₂ := e₁.equiv_of_decide e₂ n h
 
+
+
+
+section DenoteEq
+
+variable {α : Q(Type $u)} {ε : Type}  {inst : Q(CommSemigroupClass $α)} [Denote α ε] [BEq ε] [Hashable ε]
+
+structure DenoteEqState (α : Q(Type $u)) (ε : Type) [BEq ε] [Hashable ε] where
+  map   : Std.HashMap ε Nat := {}
+  atoms : Array Q($α)       := #[]
+
+def denoteEq! (e₁ e₂ : CommSemigroup inst ε) : Q(($(denote q(CommSemigroupClass.add) e₁)) = $(denote q(CommSemigroupClass.add) e₂)) :=
+    StateT.run' (s := {}) <| show StateM (DenoteEqState α ε) _ from do
+  let d₁ ← encode e₁
+  let d₂ ← encode e₂
+  let atoms := (← get).atoms
+  have n : Q(Nat) := mkRawNatLit atoms.size
+  have rfl : Q(($d₁).decideEquiv $d₂ $n = true) := (q(@rfl Bool true):)
+  have fn := BinTree.mkFun atoms
+  return q(equiv_of_decide $d₁ $d₂ $n $rfl $fn)
+where
+  encode : CommSemigroup inst ε → StateM (DenoteEqState α ε) Q(Internal.CommSemigroupExpr)
+  | .add a b => return q($(← encode a).add $(← encode b))
+  | .leaf e => do
+    let n ← modifyGet fun s =>
+      match s.map[e]? with
+      | some i => (i, s)
+      | none => (s.map.size, { map := s.map.insert e s.map.size, atoms := s.atoms.push (Denote.denote e) })
+    let n : Q(Nat) := mkRawNatLit n
+    return q(Internal.CommSemigroupExpr.atom $n)
+
+instance : DenoteEq α (CommSemigroup inst ε) := ⟨denoteEq!⟩
+
+end DenoteEq
+
+
+
+
+
+open Meta Mathlib.Tactic
+-- set_option trace.Meta.synthInstance true in
 /-- Frontend of `ring1`: attempt to close a goal `g`, assuming it is an equation of semirings. -/
 def proveEq (g : MVarId) : AtomM Unit := do
-  let some (α, e₁, e₂) := (← whnfR <|← instantiateMVars <|← g.getType).eq?
+  withTraceNode `semi_group (fun _ => pure m!"starting") do
+  let some (α, e₁, e₂) := (← whnfR <| ← instantiateMVars <| ← g.getType).eq?
     | throwError "my amazing tactic failed: not an equality"
   let .sort u ← whnf (← inferType α) | unreachable!
   let some v := u.dec | throwError "not a type{indentExpr α}"
   have α : Q(Type v) := α
   have e₁ : Q($α) := e₁; have e₂ : Q($α) := e₂
-  let inst ← synthInstanceQ q(CommSemigroup $α)
+  let inst ← synthInstanceQ q(CommSemigroupClass $α)
   let eq ← ringCore inst e₁ e₂
   g.assign eq
 where
-  /-- The core of `proveEq` takes expressions `e₁ e₂ : α` where `α` is a `CommSemigroup`,
+  /-- The core of `proveEq` takes expressions `e₁ e₂ : α` where `α` is a `CommSemigroupClass`,
   and returns a proof that they are equal (or fails). -/
-  ringCore {v : Level} {α : Q(Type v)} (inst : Q(CommSemigroup $α)) (e₁ e₂ : Q($α)) : AtomM Q($e₁ = $e₂) := do
-    profileitM Exception "ring" (← getOptions) do
-      let e₁' ← ofExpr inst e₁
-      let e₂' ← ofExpr inst e₂
+  ringCore {v : Level} {α : Q(Type v)} (inst : Q(CommSemigroupClass $α)) (e₁ e₂ : Q($α)) : AtomM Q($e₁ = $e₂) := do
+    withTraceNode `semi_group (fun _ => pure m!"considering both sides") do
+    profileitM Exception "amazing tactic" (← getOptions) do
+      let r₁ : CommSemigroup inst (AtomExpr α) ← reifyAdd e₁
+      let r₂ : CommSemigroup inst (AtomExpr α) ← reifyAdd e₂
+      withTraceNode `semi_group (fun _ => pure m!"creating the proof") do
+      Qq.mkExpectedTypeHint (denoteEq! r₁ r₂)
 
-      let pf ← mkDecideProof expectedType
-      -- Get instance from `pf`
-      let s := pf.appFn!.appArg!
-      let r ← withAtLeastTransparency .default <| whnf s
-      if r.isAppOf ``isTrue then
-        -- Success!
-        -- While we have a proof from reduction, we do not embed it in the proof term,
-        -- and instead we let the kernel recompute it during type checking from the following more
-        -- efficient term. The kernel handles the unification `e =?= true` specially.
-        return pf
-      else
-        diagnose expectedType s r
-
-      unless va.eq vb do
-        let g ← mkFreshExprMVar (← (← ringCleanupRef.get) q($a = $b))
-        throwError "ring failed, ring expressions not equal\n{g.mvarId!}"
-      return q(of_eq $pa $pb)
 example : True := by decide
-
+#print proveEq.ringCore
+-- set_option pp.all true
 
 open Elab.Tactic in
 /--
@@ -442,24 +454,21 @@ allowing variables in the exponent.
 * The variant `ring1!` will use a more aggressive reducibility setting
   to determine equality of atoms.
 -/
-elab (name := ring1) "ring1" tk:"!"? : tactic => liftMetaMAtMain fun g ↦ do
+elab (name := my_amazing_semigroup_tactic) "my_amazing_semigroup_tactic" tk:"!"? : tactic => liftMetaMAtMain fun g ↦ do
   AtomM.run (if tk.isSome then .default else .reducible) (proveEq g)
 
-@[inherit_doc ring1] macro "ring1!" : tactic => `(tactic| ring1 !)
+@[inherit_doc my_amazing_semigroup_tactic] macro "my_amazing_semigroup_tactic!" : tactic => `(tactic| my_amazing_semigroup_tactic !)
+
+instance : CommSemigroupClass Nat where
+  add_assoc := Nat.add_assoc
+  add_comm := Nat.add_comm
 
 
-#check Elab.Tactic.setGoals
+def foo (a b c d e f : Nat) : a + b + f + e + d + c + b = b + c + d + e + f + b + a := by
+  my_amazing_semigroup_tactic
 
-open Elab Tactic in
-elab "my_amazing_semigroup_tactic" : tactic => do
-  let mvarId ← getMainGoal
-  let type ← inferType (.mvar mvarId)
+#print foo
 
-  let a ←
-  _
+end CommSemigroup
 
--- If we want to use a normal form tactic, then we need a way to compute the new normal form.
--- def toExpr {u : Level} {α : Q(Type $u)} (i : Q(CommSemigroup $α)) (atoms : Array Q($α)) ()
-
-end CommSemigroupExpr
-example := by decide
+end Abstraction
