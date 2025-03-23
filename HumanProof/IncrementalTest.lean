@@ -1,11 +1,16 @@
 import HumanProof.Incremental
 
-set_option pp.rawOnError true
+elab "echo " s:str : tactic => Lean.logInfo s
+
+-- try modifying the echo's of processed lines to see the state preserved,
+-- and continuing procesing below
 
 example : True := by
   my_scope
-    let x := 5
     sleep 1000
+    echo "expect 42"
+    get
+    let x := 5
     sleep 1000
     set 1
     sleep 1000
@@ -24,7 +29,7 @@ example : True := by
     sleep 1000
     set 4
     sleep 1000
-    echo "expect 4..."
+    echo "expect 4"
     get
     sleep 1000
     set 5
@@ -34,7 +39,7 @@ example : True := by
     sleep 1000
     set 6
     sleep 1000
-    echo "expect 6 wow"
+    echo "expect 6"
     get
     sleep 1000
     set 7
