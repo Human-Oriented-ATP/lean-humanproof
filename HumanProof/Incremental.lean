@@ -28,13 +28,17 @@ def myEvalTactic : Tactic := fun stx => do
   | `(tactic| $tac) =>
     evalTactic tac
 
+def myFinish (stx : Syntax) : TacticM Unit := do
+  let n := myStateExt.getState (← getEnv)
+  liftMetaM <| logInfoAt stx m!"Finished with {n}."
+
 @[tactic my_scope, incremental]
 def myScopeElab : Tactic := fun stx => do
   modifyEnv (myStateExt.setState · 42)
   Term.withNarrowedArgTacticReuse 1 (
     Term.withNarrowedArgTacticReuse 0 (
       Term.withNarrowedArgTacticReuse 0 (
-        (customEvalSepTactics myEvalTactic)
+        (customEvalSepTactics myEvalTactic (myFinish stx))
       )
     )
   ) stx

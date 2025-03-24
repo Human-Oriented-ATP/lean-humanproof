@@ -9,6 +9,20 @@ example : True := by
   my_scope
     sleep 1000
     echo "expect 42"
+    sleep 1000
+    get
+    sleep 1000
+    sleep 1000
+    let x := 5
+    set 1
+    get
+    trivial
+
+
+example : True := by
+  my_scope
+    sleep 1000
+    echo "expect 42"
     get
     let x := 5
     sleep 1000

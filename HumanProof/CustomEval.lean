@@ -6,11 +6,12 @@ open Lean Parser Elab Meta Tactic Language
 This is a copy of Lean.Elab.Tactic.evalSepTactics from the standard library
 replacing the default evalTactic with a custom function.
 -/
-partial def customEvalSepTactics (customEval : Tactic) : Tactic := goEven
+partial def customEvalSepTactics (customEval : Tactic) (finish : TacticM Unit) : Tactic := goEven
 where
   -- `stx[0]` is the next tactic step, if any
   goEven stx := do
     if stx.getNumArgs == 0 then
+      finish
       return
     let tac := stx[0]
     /-
@@ -96,6 +97,7 @@ where
   -- `stx[0]` is the next separator, if any
   goOdd stx := do
     if stx.getNumArgs == 0 then
+      finish
       return
     saveTacticInfoForToken stx[0] -- add `TacticInfo` node for `;`
     -- disable further reuse on separator change as to not reuse wrong `TacticInfo`

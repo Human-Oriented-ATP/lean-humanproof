@@ -37,16 +37,24 @@ def boxProofiElab : Tactic := fun start => do
     logWarning "Box proofs are meant to be initialized when there is just one goal."
   let mainGoal ← Lean.Elab.Tactic.getMainGoal
   let (lctxArr, box) ← Box.createProofBox mainGoal
-  let finish (proof : Expr) : TacticM Unit := do
+  let finishProof (proof : Expr) : TacticM Unit := do
     trace[box_proof]"proof term{indentExpr proof}"
     mainGoal.assign (mkAppN proof lctxArr)
+  let finishBlock : TacticM Unit := do
+    let state := boxStateExt.getState (← getEnv)
+    match state with
+    | some (box, _) =>
+      trace[box_proof]"unfinished box: {← box.show}"
+      throwError "Box proof is not finished"--\n{← box.show}"
+    | none => pure ()
+
   withLCtx {} {} do
 
-  runAndUse finish (withRef start (Box.createTacticState box))
+  runAndUse finishProof (withRef start (Box.createTacticState box))
   Term.withNarrowedArgTacticReuse 1 (
     Term.withNarrowedArgTacticReuse 0 (
       Term.withNarrowedArgTacticReuse 0 (
-        (customEvalSepTactics (boxStepi finish))
+        (customEvalSepTactics (boxStepi finishProof) finishBlock)
       )
     )
   ) start
