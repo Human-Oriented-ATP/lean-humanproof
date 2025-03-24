@@ -1,4 +1,4 @@
-import HumanProof.Basic
+import HumanProof.BoxIncremental
 import Mathlib
 
 example (a : Nat) (l : List Nat) (h1 : a ∉ l) (h2 : l.Nodup)
@@ -27,7 +27,7 @@ theorem group_problem (G : Type) [Group G]
     (a b : G) (hab : a*b ≠ b*a) :
     -- (hncomm : ¬ ∀ a b : G, a*b = b*a) :
     ∃ elems : List G, elems.length ≥ 6 ∧ elems.Nodup := by
-  box_proof
+  box_proofi
     -- simp at hncomm
     -- induction hncomm
     existsi ?elems
