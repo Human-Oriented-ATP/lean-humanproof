@@ -97,6 +97,22 @@ theorem group_problem (G : Type) [Group G]
     exact distinct_finish
     simp!
     simp only [not_not] at ainv
+    backup
+    apply add_distinct (b*b)
+    simp only [List.mem_cons, mul_right_inj, mul_left_inj, mul_right_eq_self, List.not_mem_nil,
+      or_false, or_self_left, not_or]
+    refine ⟨?_,?_,?_,?_⟩
+    intro eq
+    rw [← eq] at hab
+    simp! [mul_assoc] at hab
+    intro eq
+    simp! [eq] at hab
+    admit_goal hbb
+    intro eq
+    simp [eq] at hab
+    exact distinct_finish
+    simp only [List.length_cons, List.length_nil, zero_add, Nat.reduceAdd, ge_iff_le, le_refl]
+    backup
     apply add_distinct (a*b*a)
     simp only [List.mem_cons, mul_left_inj, mul_left_eq_self, mul_right_eq_self, List.not_mem_nil,
       or_false, or_self_left, not_or]
