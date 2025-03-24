@@ -22,9 +22,11 @@ example (x y : Int) : True ∧ ∀ a b c : Nat, a = b → a = c → b = c := by
     trivial
 
 example (p : Prop) (h : ¬ p → p) : p := by
-  box_proof
+  box_proofi
     backup
     apply h
+    sleep 1000
     admit_goal h'
+    echo "hi"
     rw [Classical.not_not] at h'
     exact h'
