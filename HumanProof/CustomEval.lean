@@ -6,7 +6,8 @@ open Lean Parser Elab Meta Tactic Language
 This is a copy of Lean.Elab.Tactic.evalSepTactics from the standard library
 replacing the default evalTactic with a custom function.
 -/
-partial def customEvalSepTactics (customEval : Tactic) (finish : TacticM Unit) : Tactic := goEven
+partial def customEvalSepTactics
+    (evalStep : Tactic := evalTactic) (finish : TacticM Unit := pure ()) : Tactic := goEven
 where
   -- `stx[0]` is the next tactic step, if any
   goEven stx := do
@@ -37,7 +38,7 @@ where
     -- compare `stx[0]` for `finished`/`next` reuse, focus on remainder of script
     Term.withNarrowedTacticReuse (stx := stx) (fun stx => (stx[0], mkNullNode stx.getArgs[1:])) fun stxs => do
       let some snap := (← readThe Term.Context).tacSnap?
-        | do customEval tac; goOdd stxs
+        | do evalStep tac; goOdd stxs
       let mut reusableResult? := none
       let mut oldNext? := none
       if let some old := snap.old? then
@@ -76,10 +77,10 @@ where
             let trees ← getResetInfoTrees
             try
               let (_, state) ← withRestoreOrSaveFull reusableResult?
-                  -- set up nested reuse; `customEval` will check for `isIncrementalElab`
+                  -- set up nested reuse; `evalStep` will check for `isIncrementalElab`
                   (tacSnap? := some { old? := oldInner?, new := inner }) do
                 Term.withReuseContext tac do
-                  customEval tac
+                  evalStep tac
               finished.resolve {
                 diagnostics := (← Language.Snapshot.Diagnostics.ofMessageLog
                   (← Core.getAndEmptyMessageLog))
