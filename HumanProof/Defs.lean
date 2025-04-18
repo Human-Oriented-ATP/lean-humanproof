@@ -1,8 +1,9 @@
 import Lean
+import ProofWidgets
 
 namespace HumanProof
 
-open Lean Meta
+open Lean Meta ProofWidgets
 
 section Notation
 
@@ -146,6 +147,118 @@ def inferType : Box → MetaM Expr
     let u2 ← getLevel ety
     return mkAppN (.const ``letFun [u1, u2]) #[α, β, value, f]
   | .savedBox _ body => inferType body
+
+open scoped Jsx Json
+/-- Mirek's code -/
+partial
+def toHtmlMirek (box : Box) : MetaM Html :=
+  singleton box
+where
+  singleton : Box → MetaM Html
+  | box@(.and _ _ _) => do
+    let items ← andItems box
+    match items with
+    | [] => return .text "Done"
+    | [x] => return x
+    | _ =>
+      return .element "ol" #[]
+        (items.toArray.map (<li>{·}</li>))
+  | box => do
+    let items ← ctxItems box
+    match items with
+    | [] => return .text "Done"
+    | [x] => return x
+    | _ =>
+      return .element "ul" #[]
+        (items.toArray.map (<li>{·}</li>))
+  ctxItems : Box → MetaM (List Html)
+  | .forallB decl box hidden? => do
+    if hidden? then
+      ctxItems box
+    else withExistingLocalDecls [decl] do
+      let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
+      let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
+      let item := <span>{displayName} : {displayType}</span>
+      return item :: (← ctxItems box)
+  | .metaVar _mvarId name type box => do
+    let displayType := <InteractiveCode fmt={← Lean.Widget.ppExprTagged type} />
+    let item := <div>
+        <span «class»=".font-code goal-goals">Goal {.text name.toString}</span>
+        <span «class»=".font-code goal-vdash"><b> ⊢ </b></span>
+        <span>{displayType}</span>
+      </div>
+      return item :: (← ctxItems box)
+  | .haveB decl value box => withExistingLocalDecls [decl] do
+    let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
+    let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
+    let displayValue : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
+    let item := <span>{displayName} : {displayType} := {displayValue}</span>
+    return item :: (← ctxItems box)
+  | .result _ => do return []
+  | box@(.and _ _ _) => return [← singleton box]
+  | .or _ _ => throwError "What? We don't use Or, or? ..."
+  | .savedBox _ box => ctxItems box
+  andItems : Box → MetaM (List Html)
+  | .and _declName value body => do
+    let value ← andItems value
+    let body ← andItems body
+    return value ++ body
+  | .result _ => do return []
+  | .savedBox _ box => ctxItems box
+  | x => return [← singleton x]
+
+/-- Anand's code -/
+def toHtmlList : Box → MetaM (List Html)
+  | .forallB decl box hidden? => do
+    if hidden? then
+      toHtmlList box
+    else withExistingLocalDecls [decl] do
+      let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
+      let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
+      let item := <span>{displayName} : {displayType}</span>
+      return item :: <br /> :: (← toHtmlList box)
+  | .metaVar _mvarId name type box => do
+    let displayType := <InteractiveCode fmt={← Lean.Widget.ppExprTagged type} />
+    let item := <div>
+        <span «class»=".font-code goal-goals">Goal {.text name.toString}</span>
+        <span «class»=".font-code goal-vdash"><b> ⊢ </b></span>
+        <span>{displayType}</span>
+      </div>
+    return item :: <br /> :: (← toHtmlList box)
+  | .haveB decl value box => withExistingLocalDecls [decl] do
+    let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
+    let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
+    let displayValue : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
+    let item := <span>{displayName} : {displayType} := {displayValue}</span>
+    return item :: <br /> :: (← toHtmlList box)
+  | .result _ => return []
+  | .and decl value box => do
+    let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
+    let displayType : Html := <InteractiveCode fmt={← withOptions (·.setNat `pp.deepTerms.threshold 2) <| Lean.Widget.ppExprTagged decl.type} />
+    let summary : Html := <summary>{displayName} : {displayType}</summary>
+    let value : Html := .element "details" #[("open", true)] (summary :: (← toHtmlList value)).toArray
+    withExistingLocalDecls [decl] do
+      return value :: <br /> :: (← toHtmlList box)
+  | .or left right => do
+    let left : Html := .element "details" #[] (← toHtmlList left).toArray
+    let right : Html := .element "details" #[] (← toHtmlList right).toArray
+    let container : Html := .element "div"
+      #[("style", .str "display: flex; gap: 1em;")]
+      #[left, right]
+    return [container]
+  | .savedBox _ box => toHtmlList box
+
+def renderWidget (stx : Syntax) (box : Box) : MetaM Unit := do
+  let boxDisplayMirek : Html := .element "details" #[("open", true)]
+    #[<summary>Mirek infoview</summary>, ← box.toHtmlMirek]
+  Widget.savePanelWidgetInfo (hash HtmlDisplay.javascript)
+    (return json% { html: $(← Server.rpcEncode boxDisplayMirek ) })
+    stx
+  let boxDisplayAnand : Html := .element "details" #[("open", true)]
+    (<summary>Anand infoview</summary> :: (← box.toHtmlList)).toArray
+  Widget.savePanelWidgetInfo (hash HtmlDisplay.javascript)
+    (return json% { html: $(← Server.rpcEncode boxDisplayAnand ) })
+    stx
 
 def getResults (box : Box) : MetaM (Array Expr) := do
   let results ← go box
