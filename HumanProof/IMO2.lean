@@ -1,4 +1,4 @@
-import HumanProof.Basic
+import HumanProof.BoxIncremental
 import Mathlib
 import HumanProof.RwMod
 
@@ -15,18 +15,23 @@ lemma my_pow_eq_self_of_exp_mod_one_totient (m : ℤ) (n : ℕ) (a : ℤ)
     : a ^ n ≡ a [ZMOD m] := by
   sorry
 
-lemma pow_totient_multiple_eq_one (n : ℕ) (m a : ℤ) (h_coprime : IsCoprime a m) (h_totient_multiple : n ≡ 0 [ZMOD m.natAbs.totient]) : a ^ n ≡ 1 [ZMOD m] := by
+lemma pow_totient_multiple_eq (n1 n2 : ℕ) (m a : ℤ) (h_coprime : IsCoprime a m) (h_totient_multiple : n1 ≡ n2 [ZMOD m.natAbs.totient]) : a ^ n1 ≡ a ^ n2 [ZMOD m] := by
   sorry
+
+lemma pow_totient_multiple_eq_one (n : ℕ) (m a : ℤ) (h_coprime : IsCoprime a m) (h_totient_multiple : n ≡ 0 [ZMOD m.natAbs.totient]) : a ^ n ≡ 1 [ZMOD m] :=
+  pow_totient_multiple_eq n 0 m a h_coprime h_totient_multiple
 
 lemma mul_right_cancel_mod (a : ℤ) {M : ℤ} (h_coprime : IsCoprime a M) {b c : ℤ} : (b * a ≡ c * a [ZMOD M]) → b ≡ c [ZMOD M] := by
   sorry
 
--- example (a b : ℕ) : a = b ∧ b = a := by
---   box_proof
---   refine ⟨?funny, ?brackets⟩
---   case' funny =>
---     refine nonsense
---   sorry
+lemma coprime_add (a b : ℤ) (h : IsCoprime a b) : IsCoprime a (b+a) := by
+  sorry
+
+lemma merge_mod (a b m1 m2: ℤ) (h : a ≡ b [ZMOD m1*m2])
+: a ≡ b [ZMOD m1] ∧ a ≡ b [ZMOD m2] := sorry
+
+lemma exists_all_mod_large (n m a : ℤ) (hm : m > 0) : ∃ N : ℕ, N > n ∧ N ≡ a [ZMOD m] := by
+  sorry
 
 /-
 free variables a,b,n0 : Z
@@ -43,7 +48,7 @@ Constraints (goals):
 * M | b^N + a
 -/
 example (a b : ℤ) (ha : a > 1) (hb : b > 1) : ∃ M : ℤ, M > 1 ∧ ∀ n0 : ℤ, ∃ N : Nat, N > n0 ∧ M ∣ a^N + b ∧ M ∣ b^N + a := by
-  box_proof
+  box_proofi
   refine ⟨?m, ?_, ?_⟩
   intro n0
   refine ⟨?N, ?_, ?goal2, ?goal1⟩
@@ -72,10 +77,46 @@ example (a b : ℤ) (ha : a > 1) (hb : b > 1) : ∃ M : ℤ, M > 1 ∧ ∀ n0 : 
     on_goal 2 => push_cast
   case' goal1.h_exp_mod_one =>
     apply sq_eq_one'
-  apply Or.intro_left
-  case' goal2 =>
-    apply mul_right_cancel_mod a ?goal1.h_coprime
-    simp [← pow_succ]
-    rw_mod pow_totient_multiple_eq_one
-  -- let HH : 1+1 = 2 := rfl
+  backup -- dead branch that ends up needing (a,b) coprime
+  apply Or.intro_right
+  case' goal2 => rw_mod (pow_totient_multiple_eq)
+  case' goal1.h_coprime => exact ?h_coprime
+  case' h_totient_multiple => exact ?goal1.h_exp_mod_one.h
+  case' goal2 => simp only [pow_one]
+  case' goal2 => exact Int.modEq_sub _ _
+  case' h_coprime =>
+    simp only [sub_neg_eq_add]
+  case' h_coprime =>
+    apply coprime_add
+  case' goal1.h_exp_mod_one.h =>
+    simp only [sub_neg_eq_add]
+  case' refine_1 =>
+    simp only [sub_neg_eq_add]
+  case' NSuccEven =>
+    refine (merge_mod _ _ _ ?_ ?merged_mod).1
+  case' goal1.h_exp_mod_one.h =>
+    refine (merge_mod _ _ _ _ ?merged_mod).2
+  case' refine_1 => omega
+  have exists_N := exists_all_mod_large n0 (2 * ↑(b + a).natAbs.totient) 1 (by
+    norm_cast
+    apply Nat.succ_mul_pos
+    apply Nat.totient_pos.mpr
+    omega
+  )
+  obtain ⟨N, Nbig, Nmod⟩ := exists_N
+    -- exact Nbig
+  -- case' goal2 =>
+  --   apply mul_right_cancel_mod a ?goal1.h_coprime
+  --   simp [← pow_succ]
+  --   rw_mod pow_totient_multiple_eq_one
+
   skip
+
+example (a : ℕ) (h : a > 0) : (a.totient > 0) := by
+  exact Nat.totient_pos.mpr h
+
+example (p q : ℕ → Prop) (h : ∃ n, p n ∧ q n)
+: ∃ m : ℕ, q m ∧ p m := by
+  box_proof
+    refine ⟨?m, ?_, ?_⟩
+    obtain ⟨n, h2⟩ := h
