@@ -26,7 +26,18 @@ example (p : Prop) (h : ¬ p → p) : p := by
     backup
     apply h
     sleep 1000
+    sleep 1000
+    sleep 1000
     admit_goal h'
     echo "hi"
     rw [Classical.not_not] at h'
+    have : True ∧ True := by
+      constructor
+      · sleep 1000
+        echo "hi there"
+        sleep 1000
+        trivial
+      · sleep 1000
+        echo "well, I am still here"
+        trivial
     exact h'

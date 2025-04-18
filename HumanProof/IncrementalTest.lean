@@ -14,7 +14,17 @@ example : True := by
     sleep 1000
     sleep 1000
     let x := 5
-    set 1
+    set 10
+    have : True ∧ True := by
+      constructor
+      · sleep 1000
+        echo "hi there"
+        sleep 1000
+        trivial
+      · sleep 1000
+        echo "I am here"
+        trivial
+    set 3
     get
     trivial
 

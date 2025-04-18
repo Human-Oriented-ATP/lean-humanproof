@@ -54,7 +54,8 @@ def boxProofiElab : Tactic := fun start => do
   Term.withNarrowedArgTacticReuse 1 (
     Term.withNarrowedArgTacticReuse 0 (
       Term.withNarrowedArgTacticReuse 0 (
-        (customEvalSepTactics (boxStepi finishProof) finishBlock)
+        (customEvalSepTactics (boxStepi finishProof))
       )
     )
   ) start
+  finishBlock

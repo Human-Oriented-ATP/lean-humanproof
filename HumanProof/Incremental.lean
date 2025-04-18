@@ -38,8 +38,9 @@ def myScopeElab : Tactic := fun stx => do
   Term.withNarrowedArgTacticReuse 1 (
     Term.withNarrowedArgTacticReuse 0 (
       Term.withNarrowedArgTacticReuse 0 (
-        (customEvalSepTactics myEvalTactic (myFinish stx))
+        (customEvalSepTactics myEvalTactic)
       )
     )
   ) stx
+  (myFinish stx)
   modifyEnv (myStateExt.setState · 0)
