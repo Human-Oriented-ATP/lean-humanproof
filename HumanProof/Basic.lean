@@ -70,7 +70,7 @@ where
         return .forallB decl body hidden
   | metaVar mvarId name type body => do
     let type ← type.replaceVars
-    let mvar ← mkFreshExprMVar type (userName := name) (kind := .syntheticOpaque)
+    let mvar ← mkFreshExprMVar type (userName := (if inMain then name else .anonymous)) (kind := .syntheticOpaque)
     modify (· %.mvarReplacements (·.insert mvarId mvar))
     let mvarId := mvar.mvarId!
     if inMain then
