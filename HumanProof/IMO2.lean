@@ -1,4 +1,4 @@
-import HumanProof.Basic
+import HumanProof.BoxIncremental
 import Mathlib
 import HumanProof.RwMod
 
@@ -15,18 +15,31 @@ lemma my_pow_eq_self_of_exp_mod_one_totient (m : ℤ) (n : ℕ) (a : ℤ)
     : a ^ n ≡ a [ZMOD m] := by
   sorry
 
-lemma pow_totient_multiple_eq_one (n : ℕ) (m a : ℤ) (h_coprime : IsCoprime a m) (h_totient_multiple : n ≡ 0 [ZMOD m.natAbs.totient]) : a ^ n ≡ 1 [ZMOD m] := by
+lemma pow_totient_multiple_eq {n1 n2 : ℕ} {m a : ℤ} (h_coprime : IsCoprime a m) (h_totient_multiple : n1 ≡ n2 [ZMOD m.natAbs.totient]) : a ^ n1 ≡ a ^ n2 [ZMOD m] := by
   sorry
+
+lemma pow_totient_multiple_eq_one {n : ℕ} {m a : ℤ} (h_coprime : IsCoprime a m) (h_totient_multiple : n ≡ 0 [ZMOD m.natAbs.totient]) : a ^ n ≡ 1 [ZMOD m] :=
+  pow_totient_multiple_eq h_coprime h_totient_multiple
 
 lemma mul_right_cancel_mod (a : ℤ) {M : ℤ} (h_coprime : IsCoprime a M) {b c : ℤ} : (b * a ≡ c * a [ZMOD M]) → b ≡ c [ZMOD M] := by
   sorry
 
--- example (a b : ℕ) : a = b ∧ b = a := by
---   box_proof
---   refine ⟨?funny, ?brackets⟩
---   case' funny =>
---     refine nonsense
---   sorry
+lemma coprime_add_mul (a b c : ℤ) (h : IsCoprime a b) : IsCoprime a (c*a+b) := by
+  sorry
+
+lemma coprime_add (a b : ℤ) (h : IsCoprime a b) : IsCoprime a (b+a) := by
+  sorry
+
+lemma merge_mod {a b m1 m2: ℤ} (h : a ≡ b [ZMOD m1*m2])
+: a ≡ b [ZMOD m1] ∧ a ≡ b [ZMOD m2] := sorry
+
+lemma exists_all_mod_large {n m a : ℤ} (hm : m > 0) : ∃ N : ℕ, N > n ∧ N ≡ a [ZMOD m] := by
+  sorry
+
+lemma modeq_minus_mod_sum {a b : ℤ} :  a ≡ (-b) [ZMOD a+b] := by
+  have := Int.modEq_sub a (-b)
+  simp only [sub_neg_eq_add] at this
+  exact this
 
 /-
 free variables a,b,n0 : Z
@@ -43,7 +56,7 @@ Constraints (goals):
 * M | b^N + a
 -/
 example (a b : ℤ) (ha : a > 1) (hb : b > 1) : ∃ M : ℤ, M > 1 ∧ ∀ n0 : ℤ, ∃ N : Nat, N > n0 ∧ M ∣ a^N + b ∧ M ∣ b^N + a := by
-  box_proof
+box_proofi
   refine ⟨?m, ?_, ?_⟩
   intro n0
   refine ⟨?N, ?_, ?goal2, ?goal1⟩
@@ -61,9 +74,7 @@ example (a b : ℤ) (ha : a > 1) (hb : b > 1) : ∃ M : ℤ, M > 1 ∧ ∀ n0 : 
   case' NSuccEven =>
     apply Int.odd_iff.mpr
   case' NSuccEven =>
-    have : (1:Int) = 1%2 := rfl
-  case' NSuccEven =>
-    rw [this]
+    rw [(rfl : (1:Int) = 1%2)]
   case' NSuccEven =>
     show ?N ≡ 1 [ZMOD 2]
   case' goal1 =>
@@ -72,10 +83,58 @@ example (a b : ℤ) (ha : a > 1) (hb : b > 1) : ∃ M : ℤ, M > 1 ∧ ∀ n0 : 
     on_goal 2 => push_cast
   case' goal1.h_exp_mod_one =>
     apply sq_eq_one'
+  -- !!! The dead branch does not work, some context compatibility breaks after escaping the branch
+  -- backup -- dead branch that ends up needing (a,b) coprime
+  -- apply Or.intro_right
+  -- case' goal2 => rw_mod (pow_totient_multiple_eq)
+  -- case' goal1.h_coprime => exact ?h_coprime
+  -- case' h_totient_multiple => exact ?goal1.h_exp_mod_one.h
+  -- case' goal2 => simp only [pow_one]
+  -- case' goal2 => exact modeq_minus_mod_sum
+  -- case' h_coprime =>
+  --   apply coprime_add
+  -- case' NSuccEven =>
+  --   refine (merge_mod (m2 := ?_) ?merged_mod).1
+  -- case' goal1.h_exp_mod_one.h =>
+  --   refine (merge_mod ?merged_mod).2
+  -- case' refine_1 => omega
+  -- case' N => refine (@exists_all_mod_large ?_ ?_ ?_ ?hm).choose
+  -- case' refine_2 => exact (exists_all_mod_large ?hm).choose_spec.1
+  -- case' merged_mod => exact (exists_all_mod_large ?hm).choose_spec.2
+  -- case' hm =>
+  --   norm_cast
+  --   apply Nat.succ_mul_pos
+  --   apply Nat.totient_pos.mpr
+  --   omega
+  -- admit_goal ncoprime
+
   apply Or.intro_left
   case' goal2 =>
     apply mul_right_cancel_mod a ?goal1.h_coprime
     simp [← pow_succ]
-    rw_mod pow_totient_multiple_eq_one
-  -- let HH : 1+1 = 2 := rfl
-  skip
+    rw_mod pow_totient_multiple_eq_one ?goal1.h_coprime
+  case' h_totient_multiple =>
+    push_cast
+    rw_mod ?goal1.h_exp_mod_one.h
+    rfl
+  case' NSuccEven =>
+    rw_mod (id rfl : 1 ≡ -1 [ZMOD 2])
+  case' NSuccEven =>
+    refine (merge_mod (m2 := ?_) ?merged_mod).1
+  case' goal1.h_exp_mod_one.h =>
+    refine (merge_mod ?merged_mod).2
+  case goal2 => exact modeq_minus_mod_sum
+  have : b * a > 0 := by positivity
+  case' refine_1 => omega
+  case' goal1.h_coprime =>
+    apply coprime_add_mul
+    exact isCoprime_one_right
+  case' N => refine (@exists_all_mod_large ?_ ?_ ?_ ?hm).choose
+  case' refine_2 => exact (exists_all_mod_large ?hm).choose_spec.1
+  case' merged_mod => exact (exists_all_mod_large ?hm).choose_spec.2
+  case' hm =>
+    norm_cast
+    apply Nat.succ_mul_pos
+    apply Nat.totient_pos.mpr
+    omega
+qed

@@ -515,6 +515,21 @@ example (a b c : Prop) (ha : a) (hb : b) (h : a → b → c) : c := by
     apply h
     exact hb
     exact ha
+
+
+example (a b c : Prop) (h1 : a → c) (h2 : b → c) (h3 : ¬a → ¬b → c) : c := by
+  box_proof
+    backup
+    apply h1
+    admit_goal ha
+    backup
+    apply h2
+    admit_goal hb
+    apply h3
+    exact hb
+    exact ha
+
+
 end Test
 
 end Box
