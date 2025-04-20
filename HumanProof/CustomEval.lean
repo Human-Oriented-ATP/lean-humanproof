@@ -7,12 +7,11 @@ This is a copy of Lean.Elab.Tactic.evalSepTactics from the standard library
 replacing the default evalTactic with a custom function.
 -/
 partial def customEvalSepTactics
-    (evalStep : Tactic := evalTactic) (finish : TacticM Unit := pure ()) : Tactic := goEven
+    (evalStep : Tactic := evalTactic) : Tactic := goEven
 where
   -- `stx[0]` is the next tactic step, if any
   goEven stx := do
     if stx.getNumArgs == 0 then
-      finish
       return
     let tac := stx[0]
     /-
@@ -47,58 +46,48 @@ where
         if let some state := oldParsed.finished.get.state? then
           reusableResult? := some ((), state)
           -- only allow `next` reuse in this case
-          oldNext? := oldParsed.next.get? 0 |>.map (⟨old.stx, ·⟩)
+          oldNext? := oldParsed.next[0]?.map (⟨old.stx, ·⟩)
 
-      -- For `tac`'s snapshot task range, disregard synthetic info as otherwise
-      -- `SnapshotTree.findInfoTreeAtPos` might choose the wrong snapshot: for example, when
-      -- hovering over a `show` tactic, we should choose the info tree in `finished` over that in
-      -- `inner`, which points to execution of the synthesized `refine` step and does not contain
-      -- the full info. In most other places, siblings in the snapshot tree have disjoint ranges and
-      -- so this issue does not occur.
-      let mut range? := tac.getRange? (canonicalOnly := true)
-      -- Include trailing whitespace in the range so that `goalsAs?` does not have to wait for more
-      -- snapshots than necessary.
-      if let some range := range? then
-        range? := some { range with stop := ⟨range.stop.byteIdx + tac.getTrailingSize⟩ }
-      withAlwaysResolvedPromise fun next => do
-        withAlwaysResolvedPromise fun finished => do
-          withAlwaysResolvedPromise fun inner => do
-            snap.new.resolve {
-              desc := tac.getKind.toString
-              diagnostics := .empty
-              stx := tac
-              inner? := some { range?, task := inner.result }
-              finished := { range?, task := finished.result }
-              next := #[{ range? := stxs.getRange?, task := next.result }]
-            }
-            -- Run `tac` in a fresh info tree state and store resulting state in snapshot for
-            -- incremental reporting, then add back saved trees. Here we rely on `customEval`
-            -- producing at most one info tree as otherwise `getInfoTreeWithContext?` would panic.
-            let trees ← getResetInfoTrees
-            try
-              let (_, state) ← withRestoreOrSaveFull reusableResult?
-                  -- set up nested reuse; `evalStep` will check for `isIncrementalElab`
-                  (tacSnap? := some { old? := oldInner?, new := inner }) do
-                Term.withReuseContext tac do
-                  evalStep tac
-              finished.resolve {
-                diagnostics := (← Language.Snapshot.Diagnostics.ofMessageLog
-                  (← Core.getAndEmptyMessageLog))
-                infoTree? := (← Term.getInfoTreeWithContext?)
-                state? := state
-              }
-            finally
-              modifyInfoState fun s => { s with trees := trees ++ s.trees }
+      let next ← IO.Promise.new
+      let finished ← IO.Promise.new
+      let inner ← IO.Promise.new
+      let cancelTk? := (← readThe Core.Context).cancelTk?
+      snap.new.resolve {
+        desc := tac.getKind.toString
+        diagnostics := .empty
+        stx := tac
+        inner? := some { stx? := tac, task := inner.resultD default, cancelTk? }
+        finished := { stx? := tac, task := finished.resultD default, cancelTk? }
+        next := #[{ stx? := stxs, task := next.resultD default, cancelTk? }]
+      }
+      -- Run `tac` in a fresh info tree state and store resulting state in snapshot for
+      -- incremental reporting, then add back saved trees. Here we rely on `evalTactic`
+      -- producing at most one info tree as otherwise `getInfoTreeWithContext?` would panic.
+      let trees ← getResetInfoTrees
+      try
+        let (_, state) ← withRestoreOrSaveFull reusableResult?
+            -- set up nested reuse; `evalTactic` will check for `isIncrementalElab`
+            (tacSnap? := some { old? := oldInner?, new := inner }) do
+          Term.withReuseContext tac do
+            evalStep tac
+        finished.resolve {
+          diagnostics := (← Language.Snapshot.Diagnostics.ofMessageLog
+            (← Core.getAndEmptyMessageLog))
+          infoTree? := (← Term.getInfoTreeWithContext?)
+          state? := state
+          moreSnaps := (← Core.getAndEmptySnapshotTasks)
+        }
+      finally
+        modifyInfoState fun s => { s with trees := trees ++ s.trees }
 
-        withTheReader Term.Context ({ · with tacSnap? := some {
-          new := next
-          old? := oldNext?
-        } }) do
-          goOdd stxs
+      withTheReader Term.Context ({ · with tacSnap? := some {
+        new := next
+        old? := oldNext?
+      } }) do
+        goOdd stxs
   -- `stx[0]` is the next separator, if any
   goOdd stx := do
     if stx.getNumArgs == 0 then
-      finish
       return
     saveTacticInfoForToken stx[0] -- add `TacticInfo` node for `;`
     -- disable further reuse on separator change as to not reuse wrong `TacticInfo`
