@@ -5,7 +5,8 @@ open HumanProof Lean Meta Elab Tactic
 
 def BoxState := Box × Std.HashMap MVarId (List Box.PathItem)
 
-initialize boxStateExt : EnvExtension (Option BoxState) ← registerEnvExtension (pure none)
+initialize boxStateExt : EnvExtension (Option BoxState)
+  ← registerEnvExtension (pure none) (asyncMode := .local)
 
 def runAndUse (finish : Expr → TacticM Unit)
     (tac : ExceptT Expr TacticM BoxState) : TacticM Unit := do

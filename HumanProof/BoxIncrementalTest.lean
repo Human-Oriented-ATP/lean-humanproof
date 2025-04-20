@@ -22,7 +22,7 @@ example (x y : Int) : True ∧ ∀ a b c : Nat, a = b → a = c → b = c := by
     trivial
   qed
 
-example (p : Prop) (h : ¬ p → p) : p := by
+theorem box_incremental_example (p : Prop) (h : ¬ p → p) : p := by
   box_proofi
     backup
     apply h
