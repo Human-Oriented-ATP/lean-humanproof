@@ -394,7 +394,7 @@ def denoteEq! (e₁ e₂ : CommSemigroup inst ε) : Q(($(denote q(CommSemigroupC
   let d₂ ← encode e₂
   let atoms := (← get).atoms
   have n : Q(Nat) := mkRawNatLit atoms.size
-  have rfl : Q(($d₁).decideEquiv $d₂ $n = true) := (q(@rfl Bool true):)
+  have rfl : ($d₁).decideEquiv $d₂ $n =Q true := ⟨⟩
   have fn := BinTree.mkFun atoms
   return q(equiv_of_decide $d₁ $d₂ $n $rfl $fn)
 where
