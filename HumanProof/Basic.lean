@@ -1,4 +1,6 @@
 import HumanProof.Defs
+import Batteries
+import Qq
 
 namespace HumanProof.Box
 
@@ -13,7 +15,7 @@ structure CreateTacticState where
 
 abbrev CreateTacticM := ReaderT (List PathItem) StateRefT CreateTacticState TacticM
 
-def _root_.Lean.Expr.replaceVars (eIn : Expr) (throw : Bool := true): CreateTacticM Expr := do
+def _root_.Lean.Expr.replaceVars (eIn : Expr) (throw : Bool := true) : CreateTacticM Expr := do
   Core.transform eIn (pre := fun e => do
     match e with
     | .mvar mvarId =>
@@ -89,11 +91,11 @@ where
     let inl ← withReader (.orL inr :: ·) do go inMain inl
     let inr ← withReader (.orR inl :: ·) do go inMain inr
     return .or inl inr
-  | haveB decl value body => do
+  | haveB decl value body hidden => do
     let value ← value.replaceVars
-    decl.withReplaceVars fun decl => do
-      let body ← withReader (.haveB decl value :: ·) do go inMain body
-      return .haveB decl value body
+    decl.withReplaceVars (hidden := hidden) fun decl => do
+      let body ← withReader (.haveB decl value hidden :: ·) do go inMain body
+      return .haveB decl value body hidden
   | savedBox saved body => do
     let saved ← go false saved
     let body ← withReader (.savedBox saved :: ·) <| go inMain body
@@ -295,11 +297,11 @@ where
         let inl ← withPathItem (.orL inr) <| go inl
         let inr ← withPathItem (.orR inl) <| go inr
         return .or inl inr
-      | .haveB decl value body =>
+      | .haveB decl value body hidden =>
         let decl ← decl.mapM instantiateMVars
         let value ← instantiateMVars value
-        let body ← withPathItem (.haveB decl value) <| go body
-        return .haveB decl value body
+        let body ← withPathItem (.haveB decl value hidden) <| go body
+        return .haveB decl value body hidden
       | .savedBox saved box =>
         let box ← withPathItem (.savedBox saved) <| go box
         return .savedBox saved box)
@@ -330,7 +332,7 @@ where
       for (decl, value) in haves do
         let decl ← decl.mapM instantiateMVars
         let value ← instantiateMVars value
-        box := .haveB decl value box
+        box := .haveB decl value box (hidden := false)
     return box
 
 end FixTacticState
@@ -339,10 +341,10 @@ section SavedBox
 
 def makeBackup (box : Box) : MetaM Box :=
   match box with
-  | .forallB decl body hidden => return .forallB decl (← makeBackup body) hidden
-  | .haveB decl value body    => return .haveB decl value (← makeBackup body)
-  | .savedBox saved body      => return .savedBox saved (← makeBackup body)
-  | .result _                 => throwError "couldn't make a back-up"
+  | .forallB decl body hidden     => return .forallB decl (← makeBackup body) hidden
+  | .haveB decl value body hidden => return .haveB decl value (← makeBackup body) hidden
+  | .savedBox saved body          => return .savedBox saved (← makeBackup body)
+  | .result _                     => throwError "couldn't make a back-up"
   | _ => return .savedBox box box
 
 
@@ -374,8 +376,8 @@ def useBackup (box : Box) (address : List PathItem) (hypName : Name) : MetaM Box
   let (zipper, some boxFalse) := { zipper with cursor := box }.zipUntilBackup 0 | throwError "couldn't find a saved state to backup to"
   zipper.withLCtx do withExistingLocalDecls [decl] do
   -- let boxType ← zipper.withLCtx do withExistingLocalDecls [decl] do inferType boxTrue
-  let boxFalse := .forallB (← mkNewLocalDecl hypName (mkNot type)) boxFalse
-  let boxTrue := .forallB decl zipper.cursor
+  let boxFalse := .forallB (← mkNewLocalDecl hypName (mkNot type)) boxFalse (hidden := false)
+  let boxTrue := .forallB decl zipper.cursor (hidden := false)
   let caseFalse ← mkNewLocalDecl `caseFalse (← boxFalse.inferType)
   let caseTrue  ← mkNewLocalDecl `caseTrue  (← boxTrue.inferType)
   let proof := mkApp4 (.const ``Classical_ite []) (← inferType zipper.cursor) type caseFalse.toExpr caseTrue.toExpr
@@ -387,6 +389,97 @@ def useBackup (box : Box) (address : List PathItem) (hypName : Name) : MetaM Box
 
 end SavedBox
 
+section Obtain
+
+def telescopeAux (name : Name) (hide : Bool) (k : LocalDecl → Box → MetaM Box) : Box → OptionT MetaM Box
+  | .forallB decl body hidden => do
+    if hidden then
+      return .forallB decl (← telescopeAux name hide k body) hidden
+    else
+      withExistingLocalDecls [decl] do
+      if decl.userName == name then
+        let body' ← k decl body
+        return .forallB decl body' (hidden := hide)
+      else
+        return .forallB decl (← telescopeAux name hide k body) hidden
+  | .metaVar mvarId name type body =>
+    return .metaVar mvarId name type (← telescopeAux name hide k body)
+  | .result _ => failure
+  | .and decl value body => do
+    match ← OptionT.run <| telescopeAux name hide k value with
+    | some value' => return .and decl value' body
+    | none => withExistingLocalDecls [decl] do
+      return .and decl value (← telescopeAux name hide k body)
+  | .or inl inr => do
+    match ← OptionT.run <| telescopeAux name hide k inl with
+    | some inl' => return .or inl' inr
+    | none => return .or inl (← telescopeAux name hide k inr)
+  | .haveB decl value body hidden =>
+    if hidden then
+      return .haveB decl value (← telescopeAux name hide k body) hidden
+    else
+      withExistingLocalDecls [decl] do
+      if decl.userName == name then
+        let body' ← k decl body
+        return .haveB decl value body' (hidden := hide)
+      else
+        return .haveB decl value (← telescopeAux name hide k body) hidden
+  | .savedBox saved body =>
+    return .savedBox saved (← telescopeAux name hide k body)
+
+def telescope (b : Box) (name : Name) (hide : Bool) (k : LocalDecl → Box → MetaM Box) : MetaM Box := do
+  match ← b.telescopeAux name hide k |>.run with
+  | some b => return b
+  | none => throwError "unknown variable '{name}' in box"
+
+
+section Replace
+
+def replaceFVarInExpr (e : Expr) (var : Expr) (subst : Expr) : Expr :=
+  e.abstract #[var] |>.instantiate1 subst
+
+def replaceFVarInLocalDecl (decl : LocalDecl) (var : Expr) (subst : Expr) : LocalDecl :=
+  match decl with
+  | .cdecl index fvarId userName type bi kind => .cdecl index fvarId userName (replaceFVarInExpr type var subst) bi kind
+  | .ldecl index fvarId userName type value nonDep kind => .ldecl index fvarId userName (replaceFVarInExpr type var subst) (replaceFVarInExpr value var subst) nonDep kind
+
+def replaceFVar (b : Box) (var : Expr) (subst : Expr) : Box :=
+  match b with
+  | forallB decl body hidden => forallB (replaceFVarInLocalDecl decl var subst) (body.replaceFVar var subst) hidden
+  | metaVar mvarId name type body => metaVar mvarId name (replaceFVarInExpr type var subst) (body.replaceFVar var subst)
+  | result r => result r
+  | and decl value body => and (replaceFVarInLocalDecl decl var subst) (value.replaceFVar var subst) (body.replaceFVar var subst)
+  | or inl inr => or (inl.replaceFVar var subst) (inr.replaceFVar var subst)
+  | haveB decl value body hidden => haveB (replaceFVarInLocalDecl decl var subst) (replaceFVarInExpr value var subst) (body.replaceFVar var subst) hidden
+  | savedBox saved body => savedBox saved (body.replaceFVar var subst)
+
+end Replace
+
+open Qq in
+def obtainExists (aName pName : Name) (decl : LocalDecl) (b : Box) : MetaM Box := do
+  let_expr c@Exists α p := decl.type | throwError "expected `∃ a, p a`, not {decl.type}"
+  have u := c.constLevels![0]!
+  have α : Q(Sort $u) := α; have p : Q($α → Prop) := p
+  withLocalDeclDQ aName α fun a => do
+  let pa : Q(Prop) := p.betaRev #[a]
+  withLocalDeclD pName pa fun p' => do
+  have p' : Q($p $a) := p'
+  have subst : Q(Exists $p):= q(Exists.intro $a $p')
+  let motive ← b.inferType
+  let b := b.replaceFVar decl.toExpr subst
+  let b := forallB (← p'.fvarId!.getDecl) b (hidden := false)
+  let b := forallB (← a.fvarId!.getDecl) b (hidden := false)
+  have motive : Q(Exists $p → Prop) := ← mkLambdaFVars #[decl.toExpr] motive
+  have hVar : Q(Exists $p) := decl.toExpr
+  withLocalDeclDQ `intro q(∀ w : $α, ∀ h : $p w, $motive (Exists.intro w h)) fun intro => do
+  let result : Q($motive $hVar) := q(Exists.casesOn (motive := $motive) $hVar $intro)
+  return and (← intro.fvarId!.getDecl) b <| .result result
+
+def obtainExistsAt (h a p : Name) (b : Box) : MetaM Box := do
+  b.telescope h false (obtainExists a p)
+
+end Obtain
+
 
 section RunTactic
 
@@ -397,6 +490,7 @@ declare_syntax_cat box_tactic
 syntax (name := lean_tactic) tactic : box_tactic
 syntax "backup" : box_tactic
 syntax "admit_goal" ident (num)? : box_tactic
+syntax "box_obtain" ident ident ":=" ident : box_tactic
 
 @[inline] def boxTacticParser (rbp : Nat := 0) : Parser :=
   categoryParser `box_tactic rbp
@@ -415,7 +509,7 @@ def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
   let mut box : Box := .metaVar mvar'.mvarId! userName type (.result mvar')
   let lctxArr := (← mvarId.getDecl).lctx.decls.toArray.filterMap id |>.filter (!·.isAuxDecl)
   for decl in lctxArr.reverse do -- reversing to add in the right order
-    box := .forallB decl box
+    box := .forallB decl box (hidden := false)
   return (lctxArr.map LocalDecl.toExpr, box)
 
 
@@ -427,6 +521,8 @@ def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.Has
     let h := h.getId
     let some goal := (← getGoals)[n]? | throwError "index {n} is out of bounds"
     useBackup box addresses[goal]! h
+  | `(box_tactic| box_obtain $a $p := $h) =>
+    obtainExistsAt h.getId a.getId p.getId box
   | `(box_tactic| $tactic:tactic) =>
     let goalsBefore ← getGoals
     evalTactic tactic
@@ -469,6 +565,15 @@ end RunTactic
 -- set_option trace.box_proof true
 
 section Test
+
+example (h : ∃ a : Nat, a +1 = a*2) : ∃ b : Nat, b * 2 = b + 1 := by
+  box_proof
+    constructor
+    box_obtain a h := h
+    on_goal 2 => exact a
+    symm
+    exact h
+
 
 example (g : 1 = 1) (h : 3 = 2 + 1) : (2 + 1) = 3 := by
   skip

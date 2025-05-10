@@ -46,12 +46,12 @@ TODO: simplifications in Box
 -/
 
 inductive Box where
-| forallB (decl : LocalDecl) (body : Box) (hidden : Bool := false)
+| forallB (decl : LocalDecl) (body : Box) (hidden : Bool)
 | metaVar (mvarId : MVarId) (name : Name) (type : Expr) (body : Box)
 | result (r : Expr)
 | and (decl : LocalDecl) (value body : Box)
 | or (inl : Box) (inr : Box)
-| haveB (decl : LocalDecl) (value : Expr) (body : Box)
+| haveB (decl : LocalDecl) (value : Expr) (body : Box) (hidden : Bool)
 | savedBox (saved body : Box)
 deriving Inhabited
 
@@ -70,7 +70,7 @@ def Box.show (box : Box) : MetaM (MessageData) := do
       addMessageContext m! "And {decl.userName} : {decl.type} := {value}\n{← body.show}"
   | or inl inr =>
     return m! "{← inl.show} Or\n{← inr.show}"
-  | haveB decl value body =>
+  | haveB decl value body _hidden =>
     withExistingLocalDecls [decl] do
       addMessageContext m! "Have {decl.userName} : {decl.type} := {value}\n{← body.show}"
   | savedBox _ body => return m! "Some saved box\n{← body.show}"
@@ -102,11 +102,11 @@ def Box.mapM {m} [Monad m] (f : Expr → m Expr) : Box → m Box
   let inl ←  inl.mapM f
   let inr ←  inr.mapM f
   return .or inl inr
-| .haveB decl value body => do
+| .haveB decl value body hidden => do
   let decl ← decl.mapM f
   let value ← f value
   let body ← body.mapM f
-  return .haveB decl value body
+  return .haveB decl value body hidden
 | .savedBox saved box => do
   let box ←  box.mapM f
   return .savedBox saved box
@@ -137,7 +137,7 @@ def inferType : Box → MetaM Expr
     withExistingLocalDecls [decl] do
       inferType body
   | .or inl _inr => inferType inl
-  | .haveB decl value body => withExistingLocalDecls [decl] do
+  | .haveB decl value body _hidden => withExistingLocalDecls [decl] do
     let e ← inferType body
     let f := decl.mkLambda e
     let ety ← Meta.inferType e
@@ -172,8 +172,8 @@ where
       return .element "ul" #[]
         (items.toArray.map (<li>{·}</li>))
   ctxItems : Box → MetaM (List Html)
-  | .forallB decl box hidden? => do
-    if hidden? then
+  | .forallB decl box hidden => do
+    if hidden then
       ctxItems box
     else withExistingLocalDecls [decl] do
       let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
@@ -188,12 +188,16 @@ where
         <span>{displayType}</span>
       </div>
       return item :: (← ctxItems box)
-  | .haveB decl value box => withExistingLocalDecls [decl] do
-    let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
-    let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
-    let displayValue : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
-    let item := <span>{displayName} : {displayType} := {displayValue}</span>
-    return item :: (← ctxItems box)
+  | .haveB decl value box hidden =>
+    if hidden then
+      ctxItems box
+    else
+      withExistingLocalDecls [decl] do
+      let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
+      let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
+      let displayValue : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
+      let item := <span>{displayName} : {displayType} := {displayValue}</span>
+      return item :: (← ctxItems box)
   | .result _ => do return []
   | box@(.and _ _ _) => return [← singleton box]
   | .or _ _ => throwError "What? We don't use Or, or? ..."
@@ -209,8 +213,8 @@ where
 
 /-- Anand's code -/
 def toHtmlList : Box → MetaM (List Html)
-  | .forallB decl box hidden? => do
-    if hidden? then
+  | .forallB decl box hidden => do
+    if hidden then
       toHtmlList box
     else withExistingLocalDecls [decl] do
       let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
@@ -225,12 +229,16 @@ def toHtmlList : Box → MetaM (List Html)
         <span>{displayType}</span>
       </div>
     return item :: <br /> :: (← toHtmlList box)
-  | .haveB decl value box => withExistingLocalDecls [decl] do
-    let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
-    let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
-    let displayValue : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
-    let item := <span>{displayName} : {displayType} := {displayValue}</span>
-    return item :: <br /> :: (← toHtmlList box)
+  | .haveB decl value box hidden =>
+    if hidden then
+      toHtmlList box
+    else
+      withExistingLocalDecls [decl] do
+      let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
+      let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
+      let displayValue : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
+      let item := <span>{displayName} : {displayType} := {displayValue}</span>
+      return item :: <br /> :: (← toHtmlList box)
   | .result _ => return []
   | .and decl value box => do
     let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
@@ -277,7 +285,7 @@ where
     (← go value).flatMapM fun value => withExistingLocalDecls [decl] do
       return (← go body).map (decl.mkLet · value)
   | .or inl inr => return (← go inl) ++ (← go inr)
-  | .haveB decl value body => withExistingLocalDecls [decl] do
+  | .haveB decl value body _hidden => withExistingLocalDecls [decl] do
     (← go body).mapM fun e => do
       let f := decl.mkLambda e
       let ety ← Meta.inferType e
@@ -306,7 +314,7 @@ inductive PathItem where
   | imaginaryAnd (fvarId : FVarId)
   | orL (inr : Box)
   | orR (inl : Box)
-  | haveB (decl : LocalDecl) (value : Expr)
+  | haveB (decl : LocalDecl) (value : Expr) (hidden : Bool)
   | savedBox (saved : Box)
 
 def PathItem.toMessageData : PathItem → MessageData
@@ -317,7 +325,7 @@ def PathItem.toMessageData : PathItem → MessageData
   | imaginaryAnd fvarId => m!"imaginary and for {mkFVar fvarId}"
   | orL _inr => m!"orL"
   | orR _inl => m!"orR"
-  | haveB decl value => m!"haveB {decl.userName} : {decl.type}, value: {value}"
+  | haveB decl value _hidden => m!"haveB {decl.userName} : {decl.type}, value: {value}"
   | savedBox _ => "some saved box"
 
 instance : ToMessageData PathItem := ⟨PathItem.toMessageData⟩
@@ -349,7 +357,7 @@ instance : Hashable PathItem where
     | .imaginaryAnd fvarId => hash fvarId
 
 def PathItem.getLocalDecl? : PathItem → Option LocalDecl
-| .forallB decl _ | andR decl _ | haveB decl _ => decl
+| .forallB decl _ | andR decl _ | haveB decl _ _ => decl
 | _ => none
 
 structure ZipperItem where
@@ -383,7 +391,7 @@ def Zipper.up (zipper : Zipper) : Option (ZipperItem × Zipper) := do
   | .andR decl value          => some (item, { path, cursor := .and decl value cursor })
   | .orL inr                  => some (item, { path, cursor := .or cursor inr })
   | .orR inl                  => some (item, { path, cursor := .or inl cursor })
-  | .haveB decl value         => some (item, { path, cursor := .haveB decl value cursor })
+  | .haveB decl value hidden  => some (item, { path, cursor := .haveB decl value cursor hidden })
   | .savedBox saved           => some (item, { path, cursor := .savedBox saved cursor })
   | .imaginaryAnd _           => panic! "imaginary PathItems aren't real"
 
@@ -411,7 +419,7 @@ def Zipper.down (zipper : Zipper) (item : PathItem) : MetaM Zipper := do
   | .andR ..         => if let .and decl value body           := cursor then withFVar decl (.andR decl value) body else err
   | .orL ..          => if let .or inl inr                    := cursor then return { path := path.extend (.orL inr), cursor := inl } else err
   | .orR ..          => if let .or inl inr                    := cursor then return { path := path.extend (.orR inl), cursor := inr } else err
-  | .haveB ..        => if let .haveB decl value body         := cursor then withFVar decl (.haveB decl value) body else err
+  | .haveB ..        => if let .haveB decl value body hidden  := cursor then withFVar decl (.haveB decl value hidden) body else err
   | .savedBox ..     => if let .savedBox saved body           := cursor then return { path := path.extend (.savedBox saved), cursor := body } else err
   | .imaginaryAnd .. => err
   -- | _           => throwError "Zipper down coordinate is wrong: {item}"
