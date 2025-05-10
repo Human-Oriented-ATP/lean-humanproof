@@ -2,9 +2,26 @@ import Lean
 
 open Lean Parser Elab Meta Tactic Language
 
-/-
-This is a copy of Lean.Elab.Tactic.evalSepTactics from the standard library
-replacing the default evalTactic with a custom function.
+/--
+Assume a tactic developer writes a new general modified tactic execution,
+for example calling automation each step, displaying the goal in a specific
+way, modifying the behavior of some tactics...
+```
+def customEvalTactic : Tactic :=
+```
+Then it is possible to create a tactic scope in which this tactic is called
+on each line of the proof, while preserving the incremental elaboration by
+```
+@[tactic my_scope, incremental]
+def myScopeElab : Tactic := fun stx => do
+  Term.withNarrowedArgTacticReuse 1 (
+    Term.withNarrowedArgTacticReuse 0 (
+      Term.withNarrowedArgTacticReuse 0 (
+        (customEvalSepTactics myEvalTactic)
+      )
+    )
+  ) stx
+```
 -/
 partial def customEvalSepTactics
     (evalStep : Tactic := evalTactic) : Tactic := goEven
