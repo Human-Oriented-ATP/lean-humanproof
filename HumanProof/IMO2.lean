@@ -84,29 +84,29 @@ box_proofi
   case' goal1.h_exp_mod_one =>
     apply sq_eq_one'
   -- !!! The dead branch does not work, some context compatibility breaks after escaping the branch
-  -- backup -- dead branch that ends up needing (a,b) coprime
-  -- apply Or.intro_right
-  -- case' goal2 => rw_mod (pow_totient_multiple_eq)
-  -- case' goal1.h_coprime => exact ?h_coprime
-  -- case' h_totient_multiple => exact ?goal1.h_exp_mod_one.h
-  -- case' goal2 => simp only [pow_one]
-  -- case' goal2 => exact modeq_minus_mod_sum
-  -- case' h_coprime =>
-  --   apply coprime_add
-  -- case' NSuccEven =>
-  --   refine (merge_mod (m2 := ?_) ?merged_mod).1
-  -- case' goal1.h_exp_mod_one.h =>
-  --   refine (merge_mod ?merged_mod).2
-  -- case' refine_1 => omega
-  -- case' N => refine (@exists_all_mod_large ?_ ?_ ?_ ?hm).choose
-  -- case' refine_2 => exact (exists_all_mod_large ?hm).choose_spec.1
-  -- case' merged_mod => exact (exists_all_mod_large ?hm).choose_spec.2
-  -- case' hm =>
-  --   norm_cast
-  --   apply Nat.succ_mul_pos
-  --   apply Nat.totient_pos.mpr
-  --   omega
-  -- admit_goal ncoprime
+  backup -- dead branch that ends up needing (a,b) coprime
+  apply Or.intro_right
+  case' goal2 => rw_mod (pow_totient_multiple_eq)
+  case' goal1.h_coprime => exact ?h_coprime
+  case' h_totient_multiple => exact ?goal1.h_exp_mod_one.h
+  case' goal2 => simp only [pow_one]
+  case' goal2 => exact modeq_minus_mod_sum
+  case' h_coprime =>
+    apply coprime_add
+  case' NSuccEven =>
+    refine (merge_mod (m2 := ?_) ?merged_mod).1
+  case' goal1.h_exp_mod_one.h =>
+    refine (merge_mod ?merged_mod).2
+  case' refine_1 => omega
+  case' N => refine (@exists_all_mod_large ?_ ?_ ?_ ?hm).choose
+  case' refine_2 => exact (exists_all_mod_large ?hm).choose_spec.1
+  case' merged_mod => exact (exists_all_mod_large ?hm).choose_spec.2
+  case' hm =>
+    norm_cast
+    apply Nat.succ_mul_pos
+    apply Nat.totient_pos.mpr
+    omega
+  admit_goal ncoprime
 
   apply Or.intro_left
   case' goal2 =>
@@ -120,19 +120,19 @@ box_proofi
   case' NSuccEven =>
     rw_mod (id rfl : 1 ≡ -1 [ZMOD 2])
   case' NSuccEven =>
-    refine (merge_mod (m2 := ?_) ?merged_mod).1
+    refine (merge_mod (m2 := ?_) ?merged_mod2).1
   case' goal1.h_exp_mod_one.h =>
-    refine (merge_mod ?merged_mod).2
+    refine (merge_mod ?merged_mod2).2
   case goal2 => exact modeq_minus_mod_sum
   have : b * a > 0 := by positivity
   case' refine_1 => omega
   case' goal1.h_coprime =>
     apply coprime_add_mul
     exact isCoprime_one_right
-  case' N => refine (@exists_all_mod_large ?_ ?_ ?_ ?hm).choose
-  case' refine_2 => exact (exists_all_mod_large ?hm).choose_spec.1
-  case' merged_mod => exact (exists_all_mod_large ?hm).choose_spec.2
-  case' hm =>
+  case' N => refine (@exists_all_mod_large ?_ ?_ ?_ ?hm2).choose
+  case' refine_2 => exact (exists_all_mod_large ?hm2).choose_spec.1
+  case' merged_mod2 => exact (exists_all_mod_large ?hm2).choose_spec.2
+  case' hm2 =>
     norm_cast
     apply Nat.succ_mul_pos
     apply Nat.totient_pos.mpr

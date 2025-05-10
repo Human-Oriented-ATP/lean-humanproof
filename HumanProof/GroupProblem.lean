@@ -132,3 +132,4 @@ theorem group_problem (G : Type) [Group G]
     simp only [eq, one_mul, mul_one, ne_eq, not_true_eq_false] at hab
     exact distinct_finish
     simp only [List.length_cons, List.length_nil, zero_add, Nat.reduceAdd, ge_iff_le, le_refl]
+  qed
