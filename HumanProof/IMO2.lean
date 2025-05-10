@@ -33,7 +33,7 @@ lemma coprime_add (a b : ℤ) (h : IsCoprime a b) : IsCoprime a (b+a) := by
 lemma merge_mod {a b m1 m2: ℤ} (h : a ≡ b [ZMOD m1*m2])
 : a ≡ b [ZMOD m1] ∧ a ≡ b [ZMOD m2] := sorry
 
-lemma exists_all_mod_large {n m a : ℤ} (hm : m > 0) : ∃ N : ℕ, N > n ∧ N ≡ a [ZMOD m] := by
+lemma exists_all_mod_large (n m a : ℤ) (hm : m > 0) : ∃ N : ℕ, N > n ∧ N ≡ a [ZMOD m] := by
   sorry
 
 lemma modeq_minus_mod_sum {a b : ℤ} :  a ≡ (-b) [ZMOD a+b] := by
@@ -98,15 +98,16 @@ box_proofi
   case' goal1.h_exp_mod_one.h =>
     refine (merge_mod ?merged_mod).2
   case' refine_1 => omega
-  case' N => refine (@exists_all_mod_large ?_ ?_ ?_ ?hm).choose
-  case' refine_2 => exact (exists_all_mod_large ?hm).choose_spec.1
-  case' merged_mod => exact (exists_all_mod_large ?hm).choose_spec.2
-  case' hm =>
+  have a_pos : 2 * ↑(b + a).natAbs.totient > (0 : Int) := by
     norm_cast
     apply Nat.succ_mul_pos
     apply Nat.totient_pos.mpr
     omega
+  have ex_N := exists_all_mod_large n0 _ 1 a_pos
+  box_obtain n hs := ex_N
+  exact hs.2
   admit_goal ncoprime
+  exact hs.1
 
   apply Or.intro_left
   case' goal2 =>
@@ -129,12 +130,13 @@ box_proofi
   case' goal1.h_coprime =>
     apply coprime_add_mul
     exact isCoprime_one_right
-  case' N => refine (@exists_all_mod_large ?_ ?_ ?_ ?hm2).choose
-  case' refine_2 => exact (exists_all_mod_large ?hm2).choose_spec.1
-  case' merged_mod2 => exact (exists_all_mod_large ?hm2).choose_spec.2
-  case' hm2 =>
+  have a_pos2 : 2 * ↑(b * a + 1).natAbs.totient > (0 : Int) := by
     norm_cast
     apply Nat.succ_mul_pos
     apply Nat.totient_pos.mpr
     omega
+  have ex_N := exists_all_mod_large n0 _ (-1) a_pos2
+  box_obtain n hs := ex_N
+  exact hs.2
+  exact hs.1
 qed
