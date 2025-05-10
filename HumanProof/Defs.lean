@@ -1,5 +1,6 @@
 import Lean
 import ProofWidgets
+import Batteries
 
 namespace HumanProof
 
@@ -148,69 +149,112 @@ def inferType : Box → MetaM Expr
     return mkAppN (.const ``letFun [u1, u2]) #[α, β, value, f]
   | .savedBox _ body => inferType body
 
-open scoped Jsx Json
-/-- Mirek's code -/
-partial
-def toHtmlMirek (box : Box) : MetaM Html :=
-  singleton box
-where
-  singleton : Box → MetaM Html
-  | box@(.and _ _ _) => do
-    let items ← andItems box
-    match items with
-    | [] => return .text "Done"
-    | [x] => return x
-    | _ =>
-      return .element "ol" #[]
-        (items.toArray.map (<li>{·}</li>))
-  | box => do
-    let items ← ctxItems box
-    match items with
-    | [] => return .text "Done"
-    | [x] => return x
-    | _ =>
-      return .element "ul" #[]
-        (items.toArray.map (<li>{·}</li>))
-  ctxItems : Box → MetaM (List Html)
-  | .forallB decl box hidden => do
-    if hidden then
-      ctxItems box
-    else withExistingLocalDecls [decl] do
-      let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
-      let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
-      let item := <span>{displayName} : {displayType}</span>
-      return item :: (← ctxItems box)
-  | .metaVar _mvarId name type box => do
-    let displayType := <InteractiveCode fmt={← Lean.Widget.ppExprTagged type} />
-    let item := <div>
-        <span «class»=".font-code goal-goals">Goal {.text name.toString}</span>
-        <span «class»=".font-code goal-vdash"><b> ⊢ </b></span>
-        <span>{displayType}</span>
-      </div>
-      return item :: (← ctxItems box)
-  | .haveB decl value box hidden =>
-    if hidden then
-      ctxItems box
-    else
-      withExistingLocalDecls [decl] do
-      let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
-      let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
-      let displayValue : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
-      let item := <span>{displayName} : {displayType} := {displayValue}</span>
-      return item :: (← ctxItems box)
-  | .result _ => do return []
-  | box@(.and _ _ _) => return [← singleton box]
-  | .or _ _ => throwError "What? We don't use Or, or? ..."
-  | .savedBox _ box => ctxItems box
-  andItems : Box → MetaM (List Html)
-  | .and _declName value body => do
-    let value ← andItems value
-    let body ← andItems body
-    return value ++ body
-  | .result _ => do return []
-  | .savedBox _ box => ctxItems box
-  | x => return [← singleton x]
+namespace Mirek
 
+structure TreeLine where
+  isGoal : Bool
+  name : Name
+  type : Expr
+  value? : Option Expr := none
+  ctx : List LocalDecl
+
+structure Tree where
+  lines : List TreeLine
+  subtrees : List Tree
+
+def Tree.empty : Tree := ⟨[], []⟩
+def Tree.isEmpty (t : Tree) := t.lines.isEmpty && t.subtrees.isEmpty
+def Tree.toSubtrees (t : Tree) : List Tree :=
+  match t.lines with | [] => t.subtrees | _ => [t]
+
+def Tree.ofBox (box : Box) : Tree :=
+  aux box []
+where aux (box : Box) : ReaderM (List LocalDecl) Tree := do
+match box with
+| .forallB decl body hidden =>
+  withReader (flip List.concat decl) do
+    if hidden then aux body
+    else
+      let line : TreeLine := {
+        isGoal := false, name := decl.userName, type := decl.type, ctx := ← read }
+      let tree ← aux body
+      if tree.isEmpty then return tree
+      else return ⟨(line::tree.lines), tree.subtrees⟩
+| .metaVar _ name type body =>
+  let line : TreeLine := {
+    isGoal := true, name := name, type := type, ctx := ← read }
+  let tree ← aux body
+  return ⟨(line::tree.lines), tree.subtrees⟩
+| .result _ => return .empty
+| .and _ value body => do
+  return match ((← aux value).toSubtrees ++ (← aux body).toSubtrees) with
+  | [x] => x
+  | xs => ⟨[], xs⟩
+| .or _ _ => return ⟨[], []⟩
+| .haveB decl value body hidden =>
+  withReader (flip List.concat decl) do
+    if hidden then aux body
+    else
+      let line : TreeLine := {
+        isGoal := false, name := decl.userName, type := decl.type,
+        value? := value, ctx := ← read }
+      let tree ← aux body
+      if tree.isEmpty then return tree
+      else return ⟨(line::tree.lines), tree.subtrees⟩
+| .savedBox _ body => aux body
+
+open Jsx in
+def TreeLine.toHtml (tl : TreeLine) : MetaM Html := do
+withExistingLocalDecls tl.ctx do
+  let tlIsProp ← isProp tl.type
+  let displayType := <InteractiveCode fmt={← Lean.Widget.ppExprTagged tl.type} />
+  let nameStyle : String := if tl.isGoal then "goal-goals" else "goal-hyp"
+  let nameString : String := if tl.name.isAnonymous then "_" else tl.name.toString
+  let pref : String := if tl.isGoal then
+    if tlIsProp then "Goal " else "?"
+  else ""
+  let displayName : Html :=
+    .element "span" #[("class", toJson (".font-code "++nameStyle))]
+      #[<b>{.text (pref ++ nameString)}</b>]
+  let separator : Html := if tl.isGoal && tlIsProp then
+    <span «class»=".font-code goal-vdash"><b style={json%{"white-space": "pre"}}>   ⊢   </b></span>
+  else
+    <b style={json%{"white-space": "pre"}}>   :   </b>
+  let displayValue? : Option Html ← match tl.value? with
+  | none => pure none
+  | some value =>
+    if tlIsProp then pure none
+    else
+      pure <| some <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
+  let items : Array Html := #[displayName, separator, displayType]
+  let items : Array Html := match displayValue? with
+  | none => items
+  | some displayValue => items.append
+    #[<b style={json%{"white-space": "pre"}}>   :=   </b>, displayValue]
+  return .element "span" #[] items
+
+open scoped Jsx in
+partial
+def Tree.toHtml (tree : Tree) : MetaM Html := do
+  if tree.lines.isEmpty then
+    if tree.subtrees.isEmpty then return .text "Done"
+    let items : List Html ← tree.subtrees.mapM (fun subTree => do
+      let item ← match subTree with
+      | ⟨[line], []⟩ => line.toHtml
+      | _ => subTree.toHtml
+      pure <li>{item}</li>)
+    return .element "ol" #[] items.toArray
+  else
+    let mut displayLines ← tree.lines.toArray.mapM TreeLine.toHtml
+    if !tree.subtrees.isEmpty then
+      displayLines := displayLines.push (← Tree.toHtml <| ⟨[], tree.subtrees⟩)
+    return .element "ul" #[] (displayLines.map (<li>{·}</li>))
+
+def toHtml (box : Box) : MetaM Html := (Tree.ofBox box).toHtml
+
+end Mirek
+
+open Jsx in
 /-- Anand's code -/
 def toHtmlList : Box → MetaM (List Html)
   | .forallB decl box hidden => do
@@ -256,9 +300,10 @@ def toHtmlList : Box → MetaM (List Html)
     return [container]
   | .savedBox _ box => toHtmlList box
 
+open Jsx in
 def renderWidget (stx : Syntax) (box : Box) : MetaM Unit := do
   let boxDisplayMirek : Html := .element "details" #[("open", true)]
-    #[<summary>Mirek infoview</summary>, ← box.toHtmlMirek]
+    #[<summary>Mirek infoview</summary>, ← Mirek.toHtml box]
   Widget.savePanelWidgetInfo (hash HtmlDisplay.javascript)
     (return json% { html: $(← Server.rpcEncode boxDisplayMirek ) })
     stx
@@ -438,3 +483,7 @@ end Zipper
 end Box
 
 end HumanProof
+
+open ProofWidgets Jsx
+
+#html <span style={json%{"white-space": "pre"}}>hello    :  world</span>
