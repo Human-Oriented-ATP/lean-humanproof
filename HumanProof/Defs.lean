@@ -231,26 +231,44 @@ withExistingLocalDecls tl.ctx do
   | none => items
   | some displayValue => items.append
     #[<b style={json%{"white-space": "pre"}}>   :=   </b>, displayValue]
-  return .element "span" #[] items
+  return .element "div" #[] items
 
-open scoped Jsx in
+open Jsx in
 partial
 def Tree.toHtml (tree : Tree) : MetaM Html := do
-  if tree.lines.isEmpty then
-    if tree.subtrees.isEmpty then return .text "Done"
-    let items : List Html ← tree.subtrees.mapM (fun subTree => do
-      let item ← match subTree with
-      | ⟨[line], []⟩ => line.toHtml
-      | _ => subTree.toHtml
-      pure <li>{item}</li>)
-    return .element "ol" #[] items.toArray
-  else
-    let mut displayLines ← tree.lines.toArray.mapM TreeLine.toHtml
-    if !tree.subtrees.isEmpty then
-      displayLines := displayLines.push (← Tree.toHtml <| ⟨[], tree.subtrees⟩)
-    return .element "ul" #[] (displayLines.map (<li>{·}</li>))
+  let htmls ← toHtmlList tree
+  return .element "div" #[] htmls.toArray
+where
+  toHtmlList (tree : Tree) : MetaM (List Html) := do
+    if tree.lines.isEmpty then
+      if tree.subtrees.isEmpty then return [.text "Done"]
+      let n := tree.subtrees.length
+      tree.subtrees.zipIdx.mapM <| fun (subtree, i) => do
+        match subtree with
+        | ⟨[line], []⟩ => line.toHtml
+        | _ =>
+          let (first::rest) ← toHtmlList subtree | throwError "unexpected empty list"
+          return .element "details"
+            #[("class", "tree-view"), ("open", i+1 == n)]
+            (<summary>{first}</summary>::rest).toArray
+    else
+      let mut displayLines ← tree.lines.mapM TreeLine.toHtml
+      displayLines := displayLines
+      if !tree.subtrees.isEmpty then
+        let subtrees ← toHtmlList <| ⟨[], tree.subtrees⟩
+        displayLines := displayLines ++ subtrees
+      return displayLines
 
 def toHtml (box : Box) : MetaM Html := (Tree.ofBox box).toHtml
+
+open Jsx in
+def treeViewStyle : Html := <style>{.text "
+    details.tree-view{margin-bottom:0.1em; margin-left:1.25rem}
+    details.tree-view>summary{cursor:pointer;display:block;position:relative;padding-top: 0.2em;outline:none;-webkit-tap-highlight-color:transparent}
+    details.tree-view>summary::before{content:'';border:solid transparent;border-left:solid;border-width:.3em 0 .3em .5em;position:absolute;top:.5em;left:-1.25rem;transform:translateX(15%)}
+    details.tree-view[open]>summary::before{border:solid transparent;border-top:solid;border-width:.5em .3em 0}
+    details.tree-view>summary::after{content:'';width:1.25rem;height:1em;position:absolute;top:.3em;left:-1.25rem}"
+}</style>
 
 end Mirek
 
@@ -302,8 +320,12 @@ def toHtmlList : Box → MetaM (List Html)
 
 open Jsx in
 def renderWidget (stx : Syntax) (box : Box) : MetaM Unit := do
-  let boxDisplayMirek : Html := .element "details" #[("open", true)]
-    #[<summary>Mirek infoview</summary>, ← Mirek.toHtml box]
+  let boxDisplayMirek : Html := .element "details" #[("open", true)] #[
+    Mirek.treeViewStyle,
+    <summary>Mirek infoview</summary>,
+    ← Mirek.toHtml box,
+    <br/>
+  ]
   Widget.savePanelWidgetInfo (hash HtmlDisplay.javascript)
     (return json% { html: $(← Server.rpcEncode boxDisplayMirek ) })
     stx
