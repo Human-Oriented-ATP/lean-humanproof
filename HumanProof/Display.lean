@@ -101,7 +101,13 @@ open Jsx in
 partial
 def Tree.toHtml (tree : Tree) : MetaM Html := do
   let htmls ← toHtmlList tree
-  return .element "div" #[] (treeViewStyle :: htmls).toArray
+  let htmlInner := .element "div" #[] (treeViewStyle :: htmls).toArray
+  return (
+    <details «open»={true}>
+      <summary>Box state display</summary>
+      {htmlInner}
+    </details>
+  )
 where
   toHtmlList (tree : Tree) : MetaM (List Html) := do
     if tree.lines.isEmpty then
@@ -147,6 +153,7 @@ def RenderBox.rpc (props : PanelWidgetProps) : RequestM (RequestTask Html) :=
         let display ← box.toHtml
         return display
 
+@[widget_module]
 def RenderBox : Component PanelWidgetProps :=
   mk_rpc_widget% RenderBox.rpc
 
