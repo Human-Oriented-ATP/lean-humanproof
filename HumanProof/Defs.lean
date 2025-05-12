@@ -149,7 +149,7 @@ def inferType : Box → MetaM Expr
     return mkAppN (.const ``letFun [u1, u2]) #[α, β, value, f]
   | .savedBox _ body => inferType body
 
-namespace Mirek
+namespace Display
 
 structure TreeLine where
   isGoal : Bool
@@ -270,69 +270,18 @@ def treeViewStyle : Html := <style>{.text "
     details.tree-view>summary::after{content:'';width:1.25rem;height:1em;position:absolute;top:.3em;left:-1.25rem}"
 }</style>
 
-end Mirek
-
-open Jsx in
-/-- Anand's code -/
-def toHtmlList : Box → MetaM (List Html)
-  | .forallB decl box hidden => do
-    if hidden then
-      toHtmlList box
-    else withExistingLocalDecls [decl] do
-      let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
-      let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
-      let item := <span>{displayName} : {displayType}</span>
-      return item :: <br /> :: (← toHtmlList box)
-  | .metaVar _mvarId name type box => do
-    let displayType := <InteractiveCode fmt={← Lean.Widget.ppExprTagged type} />
-    let item := <div>
-        <span «class»=".font-code goal-goals">Goal {.text name.toString}</span>
-        <span «class»=".font-code goal-vdash"><b> ⊢ </b></span>
-        <span>{displayType}</span>
-      </div>
-    return item :: <br /> :: (← toHtmlList box)
-  | .haveB decl value box hidden =>
-    if hidden then
-      toHtmlList box
-    else
-      withExistingLocalDecls [decl] do
-      let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
-      let displayType : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged decl.type} />
-      let displayValue : Html := <InteractiveCode fmt={← Lean.Widget.ppExprTagged value} />
-      let item := <span>{displayName} : {displayType} := {displayValue}</span>
-      return item :: <br /> :: (← toHtmlList box)
-  | .result _ => return []
-  | .and decl value box => do
-    let displayName : Html := <span «class»="font-code goal-hyp"><b>{.text decl.userName.toString}</b></span>
-    let displayType : Html := <InteractiveCode fmt={← withOptions (·.setNat `pp.deepTerms.threshold 2) <| Lean.Widget.ppExprTagged decl.type} />
-    let summary : Html := <summary>{displayName} : {displayType}</summary>
-    let value : Html := .element "details" #[("open", true)] (summary :: (← toHtmlList value)).toArray
-    withExistingLocalDecls [decl] do
-      return value :: <br /> :: (← toHtmlList box)
-  | .or left right => do
-    let left : Html := .element "details" #[] (← toHtmlList left).toArray
-    let right : Html := .element "details" #[] (← toHtmlList right).toArray
-    let container : Html := .element "div"
-      #[("style", .str "display: flex; gap: 1em;")]
-      #[left, right]
-    return [container]
-  | .savedBox _ box => toHtmlList box
+end Display
 
 open Jsx in
 def renderWidget (stx : Syntax) (box : Box) : MetaM Unit := do
-  let boxDisplayMirek : Html := .element "details" #[("open", true)] #[
-    Mirek.treeViewStyle,
-    <summary>Mirek infoview</summary>,
-    ← Mirek.toHtml box,
+  let boxDisplay : Html := .element "details" #[("open", true)] #[
+    Display.treeViewStyle,
+    <summary>Box infoview</summary>,
+    ← Display.toHtml box,
     <br/>
   ]
   Widget.savePanelWidgetInfo (hash HtmlDisplay.javascript)
-    (return json% { html: $(← Server.rpcEncode boxDisplayMirek ) })
-    stx
-  let boxDisplayAnand : Html := .element "details" #[("open", true)]
-    (<summary>Anand infoview</summary> :: (← box.toHtmlList)).toArray
-  Widget.savePanelWidgetInfo (hash HtmlDisplay.javascript)
-    (return json% { html: $(← Server.rpcEncode boxDisplayAnand ) })
+    (return json% { html: $(← Server.rpcEncode boxDisplay ) })
     stx
 
 def getResults (box : Box) : MetaM (Array Expr) := do
