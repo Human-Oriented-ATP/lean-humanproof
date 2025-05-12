@@ -2,8 +2,9 @@ import HumanProof.Basic
 import HumanProof.Display
 import HumanProof.CustomEval
 
-open HumanProof Lean Meta Elab Tactic
+open Lean Meta Elab Tactic
 
+namespace HumanProof
 
 def runAndUse (finish : Expr → TacticM Unit)
     (tac : ExceptT Expr TacticM Box.BoxState) : TacticM Unit := do
@@ -30,7 +31,7 @@ def boxStepi (finish : Expr → TacticM Unit)
     trace[box_proof] "after update: {← box.show}"
     runAndUse finish (Box.createTacticState box)
 
-syntax (name := box_proofi) "box_proofi" ppLine colGe Box.boxTacticSeq : tactic
+scoped syntax (name := box_proofi) "box_proofi" ppLine colGe Box.boxTacticSeq : tactic
 
 open Lean Elab Meta Tactic
 
