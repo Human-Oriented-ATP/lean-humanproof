@@ -1,15 +1,12 @@
 import HumanProof.Basic
+import HumanProof.Display
 import HumanProof.CustomEval
 
 open HumanProof Lean Meta Elab Tactic
 
-def BoxState := Box × Std.HashMap MVarId (List Box.PathItem)
-
-initialize boxStateExt : EnvExtension (Option BoxState)
-  ← registerEnvExtension (pure none) (asyncMode := .local)
 
 def runAndUse (finish : Expr → TacticM Unit)
-    (tac : ExceptT Expr TacticM BoxState) : TacticM Unit := do
+    (tac : ExceptT Expr TacticM Box.BoxState) : TacticM Unit := do
   let state? : Option BoxState ←
     match ← tac with
     | .error proof =>
@@ -28,12 +25,12 @@ def boxStepi (finish : Expr → TacticM Unit)
   | none => logWarning "redundant tactic, all goals are finished"
   | some (box, addresses) =>
     withRef tactic do withTacticInfoContext tactic do
-    box.renderWidget tactic
+    -- box.renderWidget tactic
     let box ← Box.runBoxTactic box (TSyntax.mk tactic) addresses
     trace[box_proof] "after update: {← box.show}"
     runAndUse finish (Box.createTacticState box)
 
-syntax (name := box_proofi) "box_proofi" ppLine Box.boxTacticSeq ppLine "qed" : tactic
+syntax (name := box_proofi) "box_proofi" ppLine colGe Box.boxTacticSeq : tactic
 
 open Lean Elab Meta Tactic
 
@@ -51,7 +48,7 @@ def boxProofiElab : Tactic := fun start => do
     match state with
     | some (box, _) =>
       trace[box_proof]"unfinished box: {← box.show}"
-      box.renderWidget start
+      -- box.renderWidget start
       throwError "Box proof is not finished"--\n{← box.show}"
     | none => pure ()
 

@@ -52,8 +52,9 @@ def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM 
     modify (· %.fvarReplacements (·.insert fvarId fvar))
     k <| (← fvar.fvarId!.getDecl)
 
+def BoxState := Box × Std.HashMap MVarId (List Box.PathItem)
 
-def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List PathItem)) := do
+def createTacticState (box : Box) : ExceptT Expr TacticM BoxState := do
   setGoals []
   let (box, s) ← (go true box).run [] |>.run {}
 
@@ -457,14 +458,11 @@ end Replace
 
 open Qq in
 def obtainExists (aName pName : Name) (decl : LocalDecl) (b : Box) : MetaM Box := do
-  let_expr c@Exists α p := decl.type | throwError "expected `∃ a, p a`, not {decl.type}"
-  have u := c.constLevels![0]!
-  have α : Q(Sort $u) := α; have p : Q($α → Prop) := p
+  let ⟨1, ~q(Prop), ~q(@Exists $α $p)⟩ ← inferTypeQ decl.type
+    | throwError "expected `∃ a, p a`, not {decl.type}"
   withLocalDeclDQ aName α fun a => do
-  let pa : Q(Prop) := p.betaRev #[a]
-  withLocalDeclD pName pa fun p' => do
-  have p' : Q($p $a) := p'
-  have subst : Q(Exists $p):= q(Exists.intro $a $p')
+  withLocalDeclDQ pName q($p $a) fun p' => do
+  have subst := q(Exists.intro $a $p')
   let motive ← b.inferType
   let b := b.replaceFVar decl.toExpr subst
   let b := forallB (← p'.fvarId!.getDecl) b (hidden := false)

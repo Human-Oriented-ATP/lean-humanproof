@@ -1,11 +1,13 @@
-import HumanProof.Defs
+import HumanProof.Basic
 import ProofWidgets
 import Lean
 
+open Lean Meta ProofWidgets Server
 
-namespace HumanProof.Display
+namespace HumanProof
 
-open Lean Meta ProofWidgets
+namespace Display
+
 
 structure TreeLine where
   isGoal : Bool
@@ -121,6 +123,33 @@ where
         displayLines := displayLines ++ subtrees
       return displayLines
 
-def toHtml (box : Box) : MetaM Html := (Tree.ofBox box).toHtml
+end Display
 
-end HumanProof.Display
+def Box.toHtml (box : Box) : MetaM Html := (Display.Tree.ofBox box).toHtml
+
+initialize boxStateExt : EnvExtension (Option Box.BoxState)
+  ← registerEnvExtension (pure none) (asyncMode := .local)
+
+namespace Display
+
+open Jsx Json in
+@[server_rpc_method]
+def RenderBox.rpc (props : PanelWidgetProps) : RequestM (RequestTask Html) :=
+  RequestM.asTask do
+    if props.goals.isEmpty then
+      return <span>No goals.</span>
+    let some goal := props.goals[0]? | unreachable!
+
+    goal.ctx.val.runMetaM {} do
+      match boxStateExt.getState (← getEnv) with
+      | none => return <span>Box proof is not initialized.</span>
+      | some (box, _) =>
+        let display ← box.toHtml
+        return display
+
+def RenderBox : Component PanelWidgetProps :=
+  mk_rpc_widget% RenderBox.rpc
+
+end Display
+
+show_panel_widgets [scoped Display.RenderBox]
