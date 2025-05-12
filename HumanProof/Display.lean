@@ -142,16 +142,13 @@ open Jsx Json in
 @[server_rpc_method]
 def RenderBox.rpc (props : PanelWidgetProps) : RequestM (RequestTask Html) :=
   RequestM.asTask do
-    if props.goals.isEmpty then
-      return <span>No goals.</span>
-    let some goal := props.goals[0]? | unreachable!
+    let some goal := props.goals[0]? | return <span>No goals.</span>
 
     goal.ctx.val.runMetaM {} do
-      match boxStateExt.getState (← getEnv) with
-      | none => return <span>Box proof is not initialized.</span>
-      | some (box, _) =>
-        let display ← box.toHtml
-        return display
+      let some (box, _) := boxStateExt.getState (← getEnv) |
+        return <span>Box proof is not initialized.</span>
+      let display ← box.toHtml
+      return display
 
 @[widget_module]
 def RenderBox : Component PanelWidgetProps :=

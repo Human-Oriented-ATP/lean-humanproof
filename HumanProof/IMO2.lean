@@ -41,6 +41,8 @@ lemma modeq_minus_mod_sum {a b : ℤ} :  a ≡ (-b) [ZMOD a+b] := by
   simp only [sub_neg_eq_add] at this
   exact this
 
+open HumanProof
+
 /-
 free variables a,b,n0 : Z
 metavariables:
@@ -139,4 +141,3 @@ box_proofi
   box_obtain n hs := ex_N
   exact hs.2
   exact hs.1
-qed

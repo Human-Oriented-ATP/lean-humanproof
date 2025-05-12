@@ -23,6 +23,7 @@ theorem distinct_start {α : Type} (l : List α) :
 theorem distinct_finish {α : Type} {l : List α} :
     (l.Nodup → l.Nodup) := id
 
+open HumanProof in
 theorem group_problem (G : Type) [Group G]
     (a b : G) (hab : a*b ≠ b*a) :
     -- (hncomm : ¬ ∀ a b : G, a*b = b*a) :
@@ -52,7 +53,7 @@ theorem group_problem (G : Type) [Group G]
     simp only [← eq, mul_one, one_mul, ne_eq, not_true_eq_false] at hab
     backup
     apply add_distinct (a*b)
-    simp only [List.mem_cons, mul_left_eq_self, mul_right_eq_self, List.not_mem_nil, or_false,
+    simp only [List.mem_cons, mul_eq_right, mul_eq_left, List.not_mem_nil, or_false,
       not_or]
     refine ⟨?_,?_,?_⟩
     intro eq
@@ -64,7 +65,7 @@ theorem group_problem (G : Type) [Group G]
     simp only [eq, one_div, inv_mul_cancel, mul_inv_cancel, ne_eq, not_true_eq_false] at hab
     backup
     apply add_distinct (b*a)
-    simp only [List.mem_cons, mul_right_eq_self, mul_left_eq_self, List.not_mem_nil, or_false,
+    simp only [List.mem_cons, mul_eq_left, mul_eq_right, List.not_mem_nil, or_false,
       not_or]
     refine ⟨?_,?_,?_,?_⟩
     intro eq
@@ -78,7 +79,7 @@ theorem group_problem (G : Type) [Group G]
     exact hab eq.symm
     backup
     apply add_distinct (a*a)
-    simp only [List.mem_cons, mul_left_inj, mul_right_inj, mul_right_eq_self, List.not_mem_nil,
+    simp only [List.mem_cons, mul_left_inj, mul_right_inj, mul_eq_left, List.not_mem_nil,
       or_false, or_self_left, not_or]
     refine ⟨?_,?_,?_,?_⟩
     intro eq
@@ -99,7 +100,7 @@ theorem group_problem (G : Type) [Group G]
     simp only [not_not] at ainv
     backup
     apply add_distinct (b*b)
-    simp only [List.mem_cons, mul_right_inj, mul_left_inj, mul_right_eq_self, List.not_mem_nil,
+    simp only [List.mem_cons, mul_right_inj, mul_left_inj, mul_eq_left, List.not_mem_nil,
       or_false, or_self_left, not_or]
     refine ⟨?_,?_,?_,?_⟩
     intro eq
@@ -114,7 +115,7 @@ theorem group_problem (G : Type) [Group G]
     simp only [List.length_cons, List.length_nil, zero_add, Nat.reduceAdd, ge_iff_le, le_refl]
     backup
     apply add_distinct (a*b*a)
-    simp only [List.mem_cons, mul_left_inj, mul_left_eq_self, mul_right_eq_self, List.not_mem_nil,
+    simp only [List.mem_cons, mul_left_inj, mul_eq_right, mul_eq_left, List.not_mem_nil,
       or_false, or_self_left, not_or]
     refine ⟨?_,?_,?_,?_⟩
     intro eq
@@ -126,10 +127,9 @@ theorem group_problem (G : Type) [Group G]
     exact hab eq
     intro eq
     apply eq_div_iff_mul_eq'.mpr at eq
-    rw [one_div, ← ainv, mul_right_eq_self] at eq
+    rw [one_div, ← ainv, mul_eq_left] at eq
     simp only [eq, mul_one, one_mul, ne_eq, not_true_eq_false] at hab
     intro eq
     simp only [eq, one_mul, mul_one, ne_eq, not_true_eq_false] at hab
     exact distinct_finish
     simp only [List.length_cons, List.length_nil, zero_add, Nat.reduceAdd, ge_iff_le, le_refl]
-  qed

@@ -2,6 +2,8 @@ import HumanProof.BoxIncremental
 
 elab "echo " s:str : tactic => Lean.logInfo s
 
+open HumanProof
+
 example (x y : Int) : True ∧ ∀ a b c : Nat, a = b → a = c → b = c := by
   box_proofi
     backup
@@ -20,7 +22,6 @@ example (x y : Int) : True ∧ ∀ a b c : Nat, a = b → a = c → b = c := by
     rw [h] at g
     exact g
     trivial
-  qed
 
 theorem box_incremental_example (p : Prop) (h : ¬ p → p) : p := by
   box_proofi
@@ -42,4 +43,3 @@ theorem box_incremental_example (p : Prop) (h : ¬ p → p) : p := by
         echo "well, I am still here"
         trivial
     exact h'
-  qed
