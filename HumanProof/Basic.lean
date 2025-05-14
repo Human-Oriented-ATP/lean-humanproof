@@ -474,10 +474,16 @@ def obtainExists (aName pName : Name) (decl : LocalDecl) (b : Box) : MetaM Box :
   return and (← intro.fvarId!.getDecl) b <| .result result
 
 def obtainExistsAt (h a p : Name) (b : Box) : MetaM Box := do
-  b.telescope h false (obtainExists a p)
+  b.telescope h true (obtainExists a p)
 
 end Obtain
 
+section Clear
+
+def clear (h : Name) (b : Box) : MetaM Box := do
+  b.telescope h true (fun _ => pure)
+
+end Clear
 
 section RunTactic
 
@@ -489,6 +495,7 @@ syntax (name := lean_tactic) tactic : box_tactic
 syntax "backup" : box_tactic
 syntax "admit_goal" ident (num)? : box_tactic
 syntax "box_obtain" ident ident ":=" ident : box_tactic
+syntax "box_clear" ident : box_tactic
 
 @[inline] def boxTacticParser (rbp : Nat := 0) : Parser :=
   categoryParser `box_tactic rbp
@@ -519,8 +526,8 @@ def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.Has
     let h := h.getId
     let some goal := (← getGoals)[n]? | throwError "index {n} is out of bounds"
     useBackup box addresses[goal]! h
-  | `(box_tactic| box_obtain $a $p := $h) =>
-    obtainExistsAt h.getId a.getId p.getId box
+  | `(box_tactic| box_obtain $a $p := $h) => obtainExistsAt h.getId a.getId p.getId box
+  | `(box_tactic| box_clear $h) => clear h.getId box
   | `(box_tactic| $tactic:tactic) =>
     let goalsBefore ← getGoals
     evalTactic tactic
@@ -567,7 +574,9 @@ section Test
 example (h : ∃ a : Nat, a +1 = a*2) : ∃ b : Nat, b * 2 = b + 1 := by
   box_proof
     constructor
+    have := trivial
     box_obtain a h := h
+    box_clear this
     on_goal 2 => exact a
     symm
     exact h
