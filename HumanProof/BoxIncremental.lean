@@ -1,4 +1,3 @@
-import HumanProof.Basic
 import HumanProof.Display
 import HumanProof.CustomEval
 
@@ -7,13 +6,13 @@ open Lean Meta Elab Tactic
 namespace HumanProof
 
 def runAndUse (finish : Expr → TacticM Unit)
-    (tac : ExceptT Expr TacticM Box.BoxState) : TacticM Unit := do
+    (tac : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List Box.PathItem))) : TacticM Unit := do
   let state? : Option BoxState ←
     match ← tac with
     | .error proof =>
       finish proof
       pure none
-    | .ok state => pure state
+    | .ok ⟨box, addresses⟩ => pure <| some ⟨box, addresses, ← getMCtx⟩
   modifyEnv (boxStateExt.setState · state?)
 
 -- **WARNING** Shady idea: modify the `SourceInfo` of the `Syntax` to extend beyond the actual range
@@ -24,7 +23,7 @@ def boxStepi (finish : Expr → TacticM Unit)
     (tactic : Syntax) : TacticM Unit := do
   match boxStateExt.getState (← getEnv) with
   | none => logWarning "redundant tactic, all goals are finished"
-  | some (box, addresses) =>
+  | some ⟨box, addresses, _⟩ =>
     withRef tactic do withTacticInfoContext tactic do
     -- box.renderWidget tactic
     let box ← Box.runBoxTactic box (TSyntax.mk tactic) addresses
@@ -47,7 +46,7 @@ def boxProofiElab : Tactic := fun start => do
   let finishBlock : TacticM Unit := do
     let state := boxStateExt.getState (← getEnv)
     match state with
-    | some (box, _) =>
+    | some { box, .. } =>
       trace[box_proof]"unfinished box: {← box.show}"
       -- box.renderWidget start
       throwError "Box proof is not finished"--\n{← box.show}"

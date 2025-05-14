@@ -52,9 +52,7 @@ def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM 
     modify (· %.fvarReplacements (·.insert fvarId fvar))
     k <| (← fvar.fvarId!.getDecl)
 
-def BoxState := Box × Std.HashMap MVarId (List Box.PathItem)
-
-def createTacticState (box : Box) : ExceptT Expr TacticM BoxState := do
+def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List Box.PathItem)) := do
   setGoals []
   let (box, s) ← (go true box).run [] |>.run {}
 

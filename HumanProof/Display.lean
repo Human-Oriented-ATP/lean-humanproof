@@ -133,7 +133,12 @@ end Display
 
 def Box.toHtml (box : Box) : MetaM Html := (Display.Tree.ofBox box).toHtml
 
-initialize boxStateExt : EnvExtension (Option Box.BoxState)
+structure BoxDisplayState where
+  box : Box
+  addresses : Std.HashMap MVarId (List Box.PathItem)
+  mctx : MetavarContext
+
+initialize boxStateExt : EnvExtension (Option BoxDisplayState)
   ← registerEnvExtension (pure none) (asyncMode := .local)
 
 namespace Display
@@ -145,8 +150,9 @@ def RenderBox.rpc (props : PanelWidgetProps) : RequestM (RequestTask Html) :=
     let some goal := props.goals[0]? | return <span>No goals.</span>
 
     goal.ctx.val.runMetaM {} do
-      let some (box, _) := boxStateExt.getState (← getEnv) |
+      let some ⟨box, _, mctx⟩ := boxStateExt.getState (← getEnv) |
         return <span>Box proof is not initialized.</span>
+      setMCtx mctx
       let display ← box.toHtml
       return display
 
