@@ -10,6 +10,7 @@ namespace Display
 
 
 structure TreeLine where
+  isFocused : Bool
   isGoal : Bool
   name : Name
   type : Expr
@@ -25,7 +26,7 @@ def Tree.isEmpty (t : Tree) := t.lines.isEmpty && t.subtrees.isEmpty
 def Tree.toSubtrees (t : Tree) : List Tree :=
   match t.lines with | [] => t.subtrees | _ => [t]
 
-def Tree.ofBox (box : Box) : Tree :=
+def Tree.ofBox (box : Box) (focusedGoal : MVarId) : Tree :=
   aux box []
 where aux (box : Box) : ReaderM (List LocalDecl) Tree := do
 match box with
@@ -34,13 +35,13 @@ match box with
     if hidden then aux body
     else
       let line : TreeLine := {
-        isGoal := false, name := decl.userName, type := decl.type, ctx := ← read }
+        isFocused := false, isGoal := false, name := decl.userName, type := decl.type, ctx := ← read }
       let tree ← aux body
       if tree.isEmpty then return tree
       else return ⟨(line::tree.lines), tree.subtrees⟩
-| .metaVar _ name type body =>
+| .metaVar mvarId name type body =>
   let line : TreeLine := {
-    isGoal := true, name := name, type := type, ctx := ← read }
+    isFocused := mvarId == focusedGoal, isGoal := true, name := name, type := type, ctx := ← read }
   let tree ← aux body
   return ⟨(line::tree.lines), tree.subtrees⟩
 | .result _ => return .empty
@@ -54,7 +55,7 @@ match box with
     if hidden then aux body
     else
       let line : TreeLine := {
-        isGoal := false, name := decl.userName, type := decl.type,
+        isFocused := false, isGoal := false, name := decl.userName, type := decl.type,
         value? := value, ctx := ← read }
       let tree ← aux body
       if tree.isEmpty then return tree
@@ -68,7 +69,9 @@ def TreeLine.toHtml (tl : TreeLine) : MetaM Html := withExistingLocalDecls tl.ct
   let nameStyle : String := if tl.isGoal then "goal-goals" else "goal-hyp"
   let nameString : String := if tl.name.isAnonymous then "_" else tl.name.toString
   let pref : String := if tl.isGoal then
-    if tlIsProp then "Goal " else "?"
+    if tlIsProp then
+        s!"{if tl.isFocused then "» " else ""}Goal "
+    else "?"
   else ""
   let displayName : Html :=
     .element "span" #[("class", toJson (".font-code "++nameStyle))]
@@ -131,12 +134,13 @@ where
 
 end Display
 
-def Box.toHtml (box : Box) : MetaM Html := (Display.Tree.ofBox box).toHtml
+def Box.toHtml (box : Box) (focusedGoal : MVarId) : MetaM Html := (Display.Tree.ofBox box focusedGoal).toHtml
 
 structure BoxDisplayState where
   box : Box
   addresses : Std.HashMap MVarId (List Box.PathItem)
   mctx : MetavarContext
+  focusedGoal : MVarId
 
 initialize boxStateExt : EnvExtension (Option BoxDisplayState)
   ← registerEnvExtension (pure none) (asyncMode := .local)
@@ -150,10 +154,10 @@ def RenderBox.rpc (props : PanelWidgetProps) : RequestM (RequestTask Html) :=
     let some goal := props.goals[0]? | return <span>No goals.</span>
 
     goal.ctx.val.runMetaM {} do
-      let some ⟨box, _, mctx⟩ := boxStateExt.getState (← getEnv) |
+      let some ⟨box, _, mctx, focusedGoal⟩ := boxStateExt.getState (← getEnv) |
         return <span>Box proof is not initialized.</span>
       setMCtx mctx
-      let display ← box.toHtml
+      let display ← box.toHtml focusedGoal
       return display
 
 @[widget_module]

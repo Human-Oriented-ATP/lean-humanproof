@@ -12,7 +12,7 @@ def runAndUse (finish : Expr → TacticM Unit)
     | .error proof =>
       finish proof
       pure none
-    | .ok ⟨box, addresses⟩ => pure <| some ⟨box, addresses, ← getMCtx⟩
+    | .ok ⟨box, addresses⟩ => pure <| some ⟨box, addresses, ← getMCtx, ← getMainGoal⟩
   modifyEnv (boxStateExt.setState · state?)
 
 -- **WARNING** Shady idea: modify the `SourceInfo` of the `Syntax` to extend beyond the actual range
@@ -23,7 +23,7 @@ def boxStepi (finish : Expr → TacticM Unit)
     (tactic : Syntax) : TacticM Unit := do
   match boxStateExt.getState (← getEnv) with
   | none => logWarning "redundant tactic, all goals are finished"
-  | some ⟨box, addresses, _⟩ =>
+  | some ⟨box, addresses, _, focusedGoal⟩ =>
     withRef tactic do withTacticInfoContext tactic do
     -- box.renderWidget tactic
     let box ← Box.runBoxTactic box (TSyntax.mk tactic) addresses
