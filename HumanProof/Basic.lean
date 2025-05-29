@@ -494,6 +494,7 @@ syntax "backup" : box_tactic
 syntax "admit_goal" ident (num)? : box_tactic
 syntax "box_obtain" ident ident ":=" ident : box_tactic
 syntax "box_clear" ident : box_tactic
+syntax "set_goal" ident : box_tactic
 
 @[inline] def boxTacticParser (rbp : Nat := 0) : Parser :=
   categoryParser `box_tactic rbp
@@ -515,39 +516,52 @@ def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
     box := .forallB decl box (hidden := false)
   return (lctxArr.map LocalDecl.toExpr, box)
 
-
-def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.HashMap MVarId (List PathItem)) : TacticM Box := do
-  match tactic with
-  | `(box_tactic| backup) => makeBackup box
-  | `(box_tactic| admit_goal $h $[$n]?) =>
-    let n := n.elim 0 (·.getNat)
-    let h := h.getId
-    let some goal := (← getGoals)[n]? | throwError "index {n} is out of bounds"
-    useBackup box addresses[goal]! h
-  | `(box_tactic| box_obtain $a $p := $h) => obtainExistsAt h.getId a.getId p.getId box
-  | `(box_tactic| box_clear $h) => clear h.getId box
-  | `(box_tactic| $tactic:tactic) =>
-    let goalsBefore ← getGoals
-    evalTactic tactic
-    let _goalsAfter ← getGoals
-    trace[box_proof] "after tactic: {← box.show}"
-    updateBox box goalsBefore addresses
-  | _ => throwUnsupportedSyntax
+def runBoxTactic  (tactic : TSyntax `box_tactic) (addresses : Std.HashMap MVarId (List PathItem)) : (Box × MVarId) → TacticM (Box × MVarId)
+  | ⟨box, mvarId⟩ => do
+    match tactic with
+    | `(box_tactic| backup) => return ⟨← makeBackup box, mvarId⟩
+    | `(box_tactic| admit_goal $h $[$n]?) =>
+      let n := n.elim 0 (·.getNat)
+      let h := h.getId
+      let some goal := (← getGoals)[n]? | throwError "index {n} is out of bounds"
+      return ⟨← useBackup box addresses[goal]! h, mvarId⟩
+    | `(box_tactic| box_obtain $a $p := $h) =>
+      return ⟨← obtainExistsAt h.getId a.getId p.getId box, mvarId⟩
+    | `(box_tactic| box_clear $h) => return ⟨← clear h.getId box, mvarId⟩
+    | `(box_tactic| $tactic:tactic) =>
+      let goalsBefore ← getGoals
+      -- shuffle to bring the designated goal to the front
+      let goalsBefore :=
+        -- if ← mvarId.isDeclared then
+        if goalsBefore.contains mvarId then
+          (mvarId :: goalsBefore.filter (· != mvarId))
+        else goalsBefore
+      setGoals goalsBefore
+      evalTactic tactic
+      let _goalsAfter ← getGoals
+      trace[box_proof] "after tactic: {← box.show}"
+      return ⟨← updateBox box goalsBefore addresses, default⟩ -- TODO: get rid of `default`
+    | `(box_tactic| set_goal $h) =>
+      let .some goal := (← getMCtx).findUserName? h.getId | throwError "no goal with user name {h}"
+      return ⟨box, goal⟩
+    | _ => throwUnsupportedSyntax
 
 def boxLoop (box : Box) (start : Syntax) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Expr TacticM Box := do
-  let init ← withRef start (createTacticState box)
-  let (box, _) ← tactics.getElems.foldlM (init := init) fun (box, addresses) (tactic : TSyntax `box_tactic) =>
+  let (initBox, initAddresses) ← withRef start (createTacticState box)
+  let initMVarId ← getMainGoal
+  let (finalBox, _, _) ← tactics.getElems.foldlM (init := (initBox, initAddresses, initMVarId)) fun (box, addresses, mvarId) (tactic : TSyntax `box_tactic) =>
     withRef tactic do withTacticInfoContext tactic do
-    let box ← runBoxTactic box tactic addresses
+    let (box, mvarId) ← runBoxTactic tactic addresses ⟨box, mvarId⟩
     trace[box_proof] "after update: {← box.show}"
-    createTacticState box
-  return box
-
+    ExceptT.run do
+      let (box, addresses) ← createTacticState box
+      return (box, addresses, mvarId)
+  return finalBox
 
 @[tactic box_proof]
 def boxProofElab : Tactic
   | `(tactic| box_proof%$start $tactics*) => withMainContext do
-    if (← getGoals).length > 1 then
+    unless (← getGoals).length == 1 do
       logWarning "Box proofs are meant to be initialized when there is just one goal."
     let mainGoal ← getMainGoal
     let (lctxArr, box) ← createProofBox mainGoal

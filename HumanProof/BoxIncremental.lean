@@ -6,13 +6,13 @@ open Lean Meta Elab Tactic
 namespace HumanProof
 
 def runAndUse (finish : Expr → TacticM Unit)
-    (tac : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List Box.PathItem))) : TacticM Unit := do
+    (tac : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List Box.PathItem))) (focusedGoal : MVarId) : TacticM Unit := do
   let state? : Option BoxState ←
     match ← tac with
     | .error proof =>
       finish proof
       pure none
-    | .ok ⟨box, addresses⟩ => pure <| some ⟨box, addresses, ← getMCtx, ← getMainGoal⟩
+    | .ok ⟨box, addresses⟩ => pure <| some ⟨box, addresses, ← getMCtx, focusedGoal⟩
   modifyEnv (boxStateExt.setState · state?)
 
 -- **WARNING** Shady idea: modify the `SourceInfo` of the `Syntax` to extend beyond the actual range
@@ -26,9 +26,9 @@ def boxStepi (finish : Expr → TacticM Unit)
   | some ⟨box, addresses, _, focusedGoal⟩ =>
     withRef tactic do withTacticInfoContext tactic do
     -- box.renderWidget tactic
-    let box ← Box.runBoxTactic box (TSyntax.mk tactic) addresses
+    let ⟨box, focusedGoal⟩ ← Box.runBoxTactic (TSyntax.mk tactic) addresses ⟨box, focusedGoal⟩
     trace[box_proof] "after update: {← box.show}"
-    runAndUse finish (Box.createTacticState box)
+    runAndUse finish (Box.createTacticState box) focusedGoal
 
 scoped syntax (name := box_proofi) "box_proofi" ppLine colGe Box.boxTacticSeq : tactic
 
@@ -54,7 +54,7 @@ def boxProofiElab : Tactic := fun start => do
 
   withLCtx {} {} do
 
-  runAndUse finishProof (withRef start (Box.createTacticState box))
+  runAndUse (focusedGoal := mainGoal) finishProof (withRef start (Box.createTacticState box))
   Term.withNarrowedArgTacticReuse 1 (
     Term.withNarrowedArgTacticReuse 0 (
       Term.withNarrowedArgTacticReuse 0 (
