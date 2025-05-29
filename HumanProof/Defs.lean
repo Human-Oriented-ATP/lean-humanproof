@@ -75,6 +75,15 @@ def Box.show (box : Box) : MetaM (MessageData) := do
       addMessageContext m! "Have {decl.userName} : {decl.type} := {value}\n{← body.show}"
   | savedBox _ body => return m! "Some saved box\n{← body.show}"
 
+def Box.getGoal : Box → Option MVarId
+| .forallB _ body _ => body.getGoal
+| .metaVar mvarId _ _ _ => some mvarId
+| .result _ => none
+| .and _ value body => value.getGoal <|> body.getGoal
+| .or inl inr => inl.getGoal <|> inr.getGoal
+| .haveB _ _ body _ => body.getGoal
+| .savedBox _ box => box.getGoal
+
 section Map
 
 @[specialize]

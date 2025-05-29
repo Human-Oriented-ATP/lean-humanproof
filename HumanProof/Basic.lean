@@ -11,14 +11,14 @@ section ToTacticState
 structure BoxState where
   box : Box
   addresses : Std.HashMap MVarId (List Box.PathItem) := {}
-  focus : MVarId
+  focused : MVarId
   mvarReplacements : Std.HashMap MVarId Expr := {}
   fvarReplacements : Std.HashMap FVarId Expr := {}
 
 abbrev BoxM := StateRefT BoxState TacticM
 
-def BoxM.run {α} (box : Box) (focus : MVarId) (x : BoxM α) : TacticM α :=
-  StateRefT'.run' x { box, focus }
+def BoxM.run {α} (box : Box) (focused : MVarId) (x : BoxM α) : TacticM α :=
+  StateRefT'.run' x { box, focused }
 
 abbrev CreateTacticM := ReaderT (List PathItem) BoxM
 
@@ -69,7 +69,8 @@ def createTacticState : ExceptT Expr BoxM Unit := do
     else
       throwError "couldn't get the result from {← box.show}"
   else
-    modify ({ · with box })
+    let some focused := (← get).mvarReplacements[(← get).focused]? | throwError "focussed goal {(← get).focused} isn't in the box"
+    modify ({ · with box, focused := focused.mvarId! })
 where
   go (inMain : Bool) : Box → ReaderT (List PathItem) BoxM Box
   | forallB decl body hidden => do
@@ -191,14 +192,22 @@ def _root_.Std.HashMap.insertInArray {α} {β} [BEq α] [Hashable α] (m : Std.H
 Collect the metavariables that appear in a goal after a tactic has been run, which modified the
 metavariable context.
 -/
-partial def traverseAssignedMVarIds (goals : List MVarId) (addresses : Std.HashMap MVarId (List PathItem)) : MetaM UpdateBoxContext := do
-  let (_, { newMVars, newMVarsArr, newAnds, newHaves, assignedMVars }) ← StateT.run (s := {}) <| goals.forM fun mvarId => do
+partial def traverseAssignedMVarIds (goals : List MVarId) (addresses : Std.HashMap MVarId (List PathItem)) : BoxM UpdateBoxContext := do
+  let (_, { newMVars, newMVarsArr, newAnds, newHaves, assignedMVars }) ← liftMetaM <| StateT.run (s := {}) <| goals.forM fun mvarId => do
     if ← mvarId.isAssigned then
       modify (· %.assignedMVars (·.push mvarId))
       traverse mvarId (.goal mvarId)
   -- Now we compute for each origin the corresponding address
   let addresses := addresses.fold (init := {}) fun map mvarId address => map.insert (.goal mvarId) address
   let (_, addresses) ← (newAnds.forM fun fvarId _ => discard <| computeAndAddress fvarId newAnds).run addresses
+
+  if ← (← get).focused.isAssigned then
+    if let some mvarId := newMVarsArr[0]? then
+      modify ({ · with focused := mvarId })
+    else if let mvarId :: _ ← getGoals then
+      modify ({ · with focused := mvarId })
+    else
+      modify ({ · with focused := default })
 
   let mut ctx := {}
   for mvarId in assignedMVars do
@@ -279,7 +288,7 @@ abbrev UpdateBoxM α := ReaderT UpdateBoxContext MetaM α
 def withPathItem {α} (item : PathItem) : UpdateBoxM α → UpdateBoxM α :=
   withReader (· %.address (item :: ·))
 
-partial def updateBox (box : Box) (goals : List MVarId) (addresses : Std.HashMap MVarId (List PathItem)) : TacticM Box := do
+partial def updateBox (box : Box) (goals : List MVarId) (addresses : Std.HashMap MVarId (List PathItem)) : BoxM Box := do
   let ctx ← traverseAssignedMVarIds goals addresses
   go box |>.run ctx
 where
@@ -373,7 +382,7 @@ def mkNewLocalDecl (name : Name) (type : Expr) : MetaM LocalDecl := do
 theorem Classical_ite (q : Prop) (p : Prop) (caseFalse : ¬ p → q) (caseTrue : p → q) : q := by
   by_cases h : p <;> simp [*]
 
-def useBackup (box : Box) (address : List PathItem) (hypName : Name) : MetaM Box := do
+def useBackup (box : Box) (address : List PathItem) (hypName : Name) : BoxM Unit := do
   let zipper ← Zipper.unzip box address
   let .metaVar mvarId _ type box := zipper.cursor | throwError "expected a meta variable box: {← box.show}"
   let decl ← mkNewLocalDecl hypName type
@@ -387,11 +396,19 @@ def useBackup (box : Box) (address : List PathItem) (hypName : Name) : MetaM Box
   let caseFalse ← mkNewLocalDecl `caseFalse (← boxFalse.inferType)
   let caseTrue  ← mkNewLocalDecl `caseTrue  (← boxTrue.inferType)
   let proof := mkApp4 (.const ``Classical_ite []) (← inferType zipper.cursor) type caseFalse.toExpr caseTrue.toExpr
-  let box : Box :=
+  let cursor : Box :=
     .and caseFalse boxFalse <|
     .and caseTrue boxTrue <|
     .result proof
-  return { zipper with cursor := box }.zip
+  let box := { zipper with cursor }.zip
+  modify ({ · with box })
+  if (← get).focused == mvarId then
+    if let some focused := cursor.getGoal then
+      modify ({ · with focused })
+    else if let some focused := box.getGoal then
+      modify ({ · with focused })
+    else
+      modify ({ · with focused := default })
 
 end SavedBox
 
@@ -535,8 +552,7 @@ def runBoxTactic (tactic : TSyntax `box_tactic) : BoxM Unit := do
     let h := h.getId
     let some goal := (← getGoals)[n]? | throwError "index {n} is out of bounds"
     let { box, addresses, .. } ← get
-    let box ← useBackup box addresses[goal]! h
-    modify ({ · with box })
+    useBackup box addresses[goal]! h
   | `(box_tactic| box_obtain $a $p := $h) =>
     let box ← obtainExistsAt h.getId a.getId p.getId (← get).box
     modify ({ · with box })
@@ -544,23 +560,23 @@ def runBoxTactic (tactic : TSyntax `box_tactic) : BoxM Unit := do
     let box ← clear h.getId (← get).box
     modify ({ · with box })
   | `(box_tactic| $tactic:tactic) =>
-    let focus := (← get).focus
+    let focused := (← get).focused
     let goalsBefore ← getGoals
     let goalsBefore :=
-      if goalsBefore.contains focus then
-        (focus :: goalsBefore.filter (· != focus))
+      if goalsBefore.contains focused then
+        (focused :: goalsBefore.filter (· != focused))
       else
         goalsBefore
     setGoals goalsBefore
     evalTactic tactic
-    let _goalsAfter ← getGoals
+    -- let goalsAfter ← getGoals
     let { box, addresses, .. } ← get
     trace[box_proof] "after tactic: {← box.show}"
     let box ← updateBox box goalsBefore addresses
     modify ({ · with box })
   | `(box_tactic| set_goal $h) =>
-    let some focus_ := (← getMCtx).findUserName? h.getId | throwError "no goal with user name {h}"
-    modify ({ · with focus := focus_ })
+    let some focused := (← getMCtx).findUserName? h.getId | throwError "no goal with user name {h}"
+    modify ({ · with focused })
   | _ => throwUnsupportedSyntax
 
 @[inline] def mapTacticM {m} [MonadControlT TacticM m] [Monad m] (f : forall {α}, TacticM α → TacticM α) {α} (x : m α) : m α :=
@@ -599,13 +615,14 @@ def boxProofElab : Tactic
 
 end RunTactic
 
--- set_option trace.box_proof true
+set_option trace.box_proof true
 
 section Test
 
 example (h : ∃ a : Nat, a +1 = a*2) : ∃ b : Nat, b * 2 = b + 1 := by
   box_proof
     constructor
+    set_goal h
     have := trivial
     box_obtain a h := h
     box_clear this
@@ -622,6 +639,7 @@ example (g : 1 = 1) (h : 3 = 2 + 1) : (2 + 1) = 3 := by
 example (n m k : Nat) (h: n = m) (h' : m = k) : n = k ∧ n = k := by
   box_proof
     constructor
+    set_goal left
     have x : 1 = 1 := rfl
     rw [← h] at h'
     rw [h']
@@ -657,8 +675,8 @@ example (p : Prop) (h : ¬ p → p) : p := by
 example (a b c : Prop) (ha : a) (hb : b) (h : a → b → c) : c := by
   box_proof
     apply h
-    exact hb
     exact ha
+    exact hb
 
 
 example (a b c : Prop) (h1 : a → c) (h2 : b → c) (h3 : ¬a → ¬b → c) : c := by
