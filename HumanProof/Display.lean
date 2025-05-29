@@ -136,11 +136,8 @@ end Display
 
 def Box.toHtml (box : Box) (focusedGoal : MVarId) : MetaM Html := (Display.Tree.ofBox box focusedGoal).toHtml
 
-structure BoxDisplayState where
-  box : Box
-  addresses : Std.HashMap MVarId (List Box.PathItem)
+structure BoxDisplayState extends Box.BoxState where
   mctx : MetavarContext
-  focusedGoal : MVarId
 
 initialize boxStateExt : EnvExtension (Option BoxDisplayState)
   ← registerEnvExtension (pure none) (asyncMode := .local)
@@ -154,10 +151,10 @@ def RenderBox.rpc (props : PanelWidgetProps) : RequestM (RequestTask Html) :=
     let some goal := props.goals[0]? | return <span>No goals.</span>
 
     goal.ctx.val.runMetaM {} do
-      let some ⟨box, _, mctx, focusedGoal⟩ := boxStateExt.getState (← getEnv) |
+      let some s := boxStateExt.getState (← getEnv) |
         return <span>Box proof is not initialized.</span>
-      setMCtx mctx
-      let display ← box.toHtml focusedGoal
+      setMCtx s.mctx
+      let display ← s.box.toHtml s.focus
       return display
 
 @[widget_module]

@@ -6,14 +6,15 @@ open Lean Meta Elab Tactic
 namespace HumanProof
 
 def runAndUse (finish : Expr → TacticM Unit)
-    (tac : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List Box.PathItem))) : TacticM Unit := do
-  let state? : Option BoxState ←
-    match ← tac with
-    | .error proof =>
-      finish proof
-      pure none
-    | .ok ⟨box, addresses⟩ => pure <| some ⟨box, addresses, ← getMCtx, ← getMainGoal⟩
-  modifyEnv (boxStateExt.setState · state?)
+    (tac : ExceptT Expr Box.BoxM Unit) : Box.BoxM Unit := do
+  match ← tac with
+  | .error proof =>
+    finish proof
+    modifyEnv (boxStateExt.setState · none)
+  | .ok _ =>
+    let s ← get
+    let mctx ← getMCtx
+    modifyEnv (boxStateExt.setState · (some { s with mctx }) )
 
 -- **WARNING** Shady idea: modify the `SourceInfo` of the `Syntax` to extend beyond the actual range
 -- This might potentially allow box states to be displayed at the end of a tactic block
@@ -23,12 +24,13 @@ def boxStepi (finish : Expr → TacticM Unit)
     (tactic : Syntax) : TacticM Unit := do
   match boxStateExt.getState (← getEnv) with
   | none => logWarning "redundant tactic, all goals are finished"
-  | some ⟨box, addresses, _, focusedGoal⟩ =>
-    withRef tactic do withTacticInfoContext tactic do
-    -- box.renderWidget tactic
-    let box ← Box.runBoxTactic box (TSyntax.mk tactic) addresses
-    trace[box_proof] "after update: {← box.show}"
-    runAndUse finish (Box.createTacticState box)
+  | some s =>
+    StateRefT'.run' (s := s.toBoxState) (do
+      withRef tactic do Box.withTacticInfoContext' tactic do
+      -- box.renderWidget tactic
+      Box.runBoxTactic (TSyntax.mk tactic)
+      trace[box_proof] "after update: {← (← get).box.show}"
+      runAndUse finish (Box.createTacticState))
 
 scoped syntax (name := box_proofi) "box_proofi" ppLine colGe Box.boxTacticSeq : tactic
 
@@ -39,7 +41,7 @@ def boxProofiElab : Tactic := fun start => do
   if (← Lean.Elab.Tactic.getGoals).length > 1 then
     logWarning "Box proofs are meant to be initialized when there is just one goal."
   let mainGoal ← Lean.Elab.Tactic.getMainGoal
-  let (lctxArr, box) ← Box.createProofBox mainGoal
+  let (lctxArr, box, focus_) ← Box.createProofBox mainGoal
   let finishProof (proof : Expr) : TacticM Unit := do
     trace[box_proof]"proof term{indentExpr proof}"
     mainGoal.assign (mkAppN proof lctxArr)
@@ -53,8 +55,7 @@ def boxProofiElab : Tactic := fun start => do
     | none => pure ()
 
   withLCtx {} {} do
-
-  runAndUse finishProof (withRef start (Box.createTacticState box))
+  Box.BoxM.run box focus_ do runAndUse finishProof (withRef start (Box.createTacticState))
   Term.withNarrowedArgTacticReuse 1 (
     Term.withNarrowedArgTacticReuse 0 (
       Term.withNarrowedArgTacticReuse 0 (

@@ -8,12 +8,19 @@ open Lean Meta Elab Tactic
 
 section ToTacticState
 
-structure CreateTacticState where
-  addresses        : Std.HashMap MVarId (List PathItem) := {}
+structure BoxState where
+  box : Box
+  addresses : Std.HashMap MVarId (List Box.PathItem) := {}
+  focus : MVarId
   mvarReplacements : Std.HashMap MVarId Expr := {}
   fvarReplacements : Std.HashMap FVarId Expr := {}
 
-abbrev CreateTacticM := ReaderT (List PathItem) StateRefT CreateTacticState TacticM
+abbrev BoxM := StateRefT BoxState TacticM
+
+def BoxM.run {α} (box : Box) (focus : MVarId) (x : BoxM α) : TacticM α :=
+  StateRefT'.run' x { box, focus }
+
+abbrev CreateTacticM := ReaderT (List PathItem) BoxM
 
 def _root_.Lean.Expr.replaceVars (eIn : Expr) (throw : Bool := true) : CreateTacticM Expr := do
   Core.transform eIn (pre := fun e => do
@@ -52,19 +59,19 @@ def _root_.Lean.LocalDecl.withReplaceVars {α} (k : LocalDecl → CreateTacticM 
     modify (· %.fvarReplacements (·.insert fvarId fvar))
     k <| (← fvar.fvarId!.getDecl)
 
-def createTacticState (box : Box) : ExceptT Expr TacticM (Box × Std.HashMap MVarId (List Box.PathItem)) := do
-  setGoals []
-  let (box, s) ← (go true box).run [] |>.run {}
 
+def createTacticState : ExceptT Expr BoxM Unit := do
+  setGoals []
+  let box ← (go true (← get).box).run []
   if (← getGoals).isEmpty then
     if let some proof ← box.getResult then
       throwThe _ proof
     else
       throwError "couldn't get the result from {← box.show}"
   else
-    return (box, s.addresses)
+    modify ({ · with box })
 where
-  go (inMain : Bool) : Box → (ReaderT (List PathItem) StateRefT CreateTacticState TacticM) Box
+  go (inMain : Bool) : Box → ReaderT (List PathItem) BoxM Box
   | forallB decl body hidden => do
       decl.withReplaceVars (hidden := hidden) fun decl => do
         let body ← withReader (.forallB decl hidden :: ·) do go inMain body
@@ -506,43 +513,58 @@ def boxTacticSeq := leading_parser
 
 syntax (name := box_proof) "box_proof" ppLine boxTacticSeq : tactic
 
-def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box) := do
+def createProofBox (mvarId : MVarId) : MetaM (Array Expr × Box × MVarId) := do
   let { userName, type, kind, .. } ← mvarId.getDecl
   let mvar' ← mkFreshExprMVar type kind userName
   let mut box : Box := .metaVar mvar'.mvarId! userName type (.result mvar')
   let lctxArr := (← mvarId.getDecl).lctx.decls.toArray.filterMap id |>.filter (!·.isAuxDecl)
   for decl in lctxArr.reverse do -- reversing to add in the right order
     box := .forallB decl box (hidden := false)
-  return (lctxArr.map LocalDecl.toExpr, box)
+  return (lctxArr.map LocalDecl.toExpr, box, mvar'.mvarId!)
 
 
-def runBoxTactic (box : Box) (tactic : TSyntax `box_tactic) (addresses : Std.HashMap MVarId (List PathItem)) : TacticM Box := do
+def runBoxTactic (tactic : TSyntax `box_tactic) : BoxM Unit := do
   match tactic with
-  | `(box_tactic| backup) => makeBackup box
+  | `(box_tactic| backup) =>
+    let { box, .. } ← get
+    let box ← makeBackup box
+    modify ({ · with box })
   | `(box_tactic| admit_goal $h $[$n]?) =>
     let n := n.elim 0 (·.getNat)
     let h := h.getId
     let some goal := (← getGoals)[n]? | throwError "index {n} is out of bounds"
-    useBackup box addresses[goal]! h
-  | `(box_tactic| box_obtain $a $p := $h) => obtainExistsAt h.getId a.getId p.getId box
-  | `(box_tactic| box_clear $h) => clear h.getId box
+    let { box, addresses, .. } ← get
+    let box ← useBackup box addresses[goal]! h
+    modify ({ · with box })
+  | `(box_tactic| box_obtain $a $p := $h) =>
+    let box ← obtainExistsAt h.getId a.getId p.getId (← get).box
+    modify ({ · with box })
+  | `(box_tactic| box_clear $h) =>
+    let box ← clear h.getId (← get).box
+    modify ({ · with box })
   | `(box_tactic| $tactic:tactic) =>
     let goalsBefore ← getGoals
     evalTactic tactic
     let _goalsAfter ← getGoals
+    let { box, addresses, .. } ← get
     trace[box_proof] "after tactic: {← box.show}"
-    updateBox box goalsBefore addresses
+    let box ← updateBox box goalsBefore addresses
+    modify ({ · with box })
   | _ => throwUnsupportedSyntax
 
-def boxLoop (box : Box) (start : Syntax) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Expr TacticM Box := do
-  let init ← withRef start (createTacticState box)
-  let (box, _) ← tactics.getElems.foldlM (init := init) fun (box, addresses) (tactic : TSyntax `box_tactic) =>
-    withRef tactic do withTacticInfoContext tactic do
-    let box ← runBoxTactic box tactic addresses
-    trace[box_proof] "after update: {← box.show}"
-    createTacticState box
-  return box
+@[inline] def mapTacticM {m} [MonadControlT TacticM m] [Monad m] (f : forall {α}, TacticM α → TacticM α) {α} (x : m α) : m α :=
+  controlAt TacticM fun runInBase => f <| runInBase x
 
+@[inline] def withTacticInfoContext' {m α} [Monad m] [MonadControlT TacticM m] (stx : Syntax) (x : m α) : m α := do
+  mapTacticM (fun x => withTacticInfoContext stx x) x
+
+def boxLoop (start : Syntax) (tactics : Syntax.TSepArray `box_tactic "") : ExceptT Expr BoxM Unit := do
+  withRef start createTacticState
+  tactics.getElems.forM fun (tactic : TSyntax `box_tactic) =>
+    withRef tactic do withTacticInfoContext' tactic do
+      runBoxTactic tactic
+      trace[box_proof] "after update: {← (← get).box.show}"
+      createTacticState
 
 @[tactic box_proof]
 def boxProofElab : Tactic
@@ -550,16 +572,17 @@ def boxProofElab : Tactic
     if (← getGoals).length > 1 then
       logWarning "Box proofs are meant to be initialized when there is just one goal."
     let mainGoal ← getMainGoal
-    let (lctxArr, box) ← createProofBox mainGoal
+    let (lctxArr, box, focus_) ← createProofBox mainGoal
+    BoxM.run box focus_ do
     withLCtx {} {} do
 
-    match ← boxLoop box start tactics with
+    match ← boxLoop start tactics with
     | .error proof =>
       trace[box_proof]"proof term{indentExpr proof}"
       mainGoal.assign (mkAppN proof lctxArr)
       -- mainGoal.withContext <| logInfo m!"Done, with proof term {indentExpr proof}"
-    | .ok box =>
-      trace[box_proof]"unfinished box: {← box.show}"
+    | .ok _ =>
+      trace[box_proof]"unfinished box: {← (← get).box.show}"
       throwError "Box proof is not finished"--\n{← box.show}"
   | _ => throwUnsupportedSyntax
 
