@@ -69,9 +69,8 @@ def TreeLine.toHtml (tl : TreeLine) : MetaM Html := withExistingLocalDecls tl.ct
   let nameStyle : String := if tl.isGoal then "goal-goals" else "goal-hyp"
   let nameString : String := if tl.name.isAnonymous then "_" else tl.name.toString
   let pref : String := if tl.isGoal then
-    if tlIsProp then
-        s!"{if tl.isFocused then "» " else ""}Goal "
-    else "?"
+    (if tl.isFocused then "» " else "") ++
+    (if tlIsProp then "Goal " else "?")
   else ""
   let displayName : Html :=
     .element "span" #[("class", toJson (".font-code "++nameStyle))]
@@ -154,7 +153,7 @@ def RenderBox.rpc (props : PanelWidgetProps) : RequestM (RequestTask Html) :=
       let some s := boxStateExt.getState (← getEnv) |
         return <span>Box proof is not initialized.</span>
       setMCtx s.mctx
-      let display ← s.box.toHtml s.focus
+      let display ← s.box.toHtml s.focused
       return display
 
 @[widget_module]
