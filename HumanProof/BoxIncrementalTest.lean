@@ -7,7 +7,7 @@ open HumanProof
 example (x y : Int) : True ∧ ∀ a b c : Nat, a = b → a = c → b = c := by
   box_proofi
     backup
-    admit_goal h 0
+    assume_goal h 0
     skip
     constructor
     skip
@@ -30,7 +30,7 @@ theorem box_incremental_example (p : Prop) (h : ¬ p → p) : p := by
     sleep 1000
     sleep 1000
     sleep 1000
-    admit_goal h'
+    assume_goal h'
     echo "hi"
     rw [Classical.not_not] at h'
     have : True ∧ True := by

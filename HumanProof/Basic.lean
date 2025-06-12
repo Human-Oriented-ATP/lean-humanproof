@@ -515,8 +515,8 @@ declare_syntax_cat box_tactic
 
 syntax (name := lean_tactic) tactic : box_tactic
 syntax "backup" : box_tactic
-syntax "admit_goal" ident (num)? : box_tactic
-syntax "box_obtain" ident ident ":=" ident : box_tactic
+syntax "assume_goal" ident (num)? : box_tactic
+syntax "box_obtain" "⟨" ident ", " ident "⟩" " := " ident : box_tactic
 syntax "box_clear" ident : box_tactic
 syntax "set_goal" ident : box_tactic
 
@@ -547,13 +547,13 @@ def runBoxTactic (tactic : TSyntax `box_tactic) : BoxM Unit := do
     let { box, .. } ← get
     let box ← makeBackup box
     modify ({ · with box })
-  | `(box_tactic| admit_goal $h $[$n]?) =>
+  | `(box_tactic| assume_goal $h $[$n]?) =>
     let n := n.elim 0 (·.getNat)
     let h := h.getId
     let some goal := (← getGoals)[n]? | throwError "index {n} is out of bounds"
     let { box, addresses, .. } ← get
     useBackup box addresses[goal]! h
-  | `(box_tactic| box_obtain $a $p := $h) =>
+  | `(box_tactic| box_obtain ⟨$a, $p⟩ := $h) =>
     let box ← obtainExistsAt h.getId a.getId p.getId (← get).box
     modify ({ · with box })
   | `(box_tactic| box_clear $h) =>
@@ -624,7 +624,7 @@ example (h : ∃ a : Nat, a +1 = a*2) : ∃ b : Nat, b * 2 = b + 1 := by
     constructor
     set_goal h
     have := trivial
-    box_obtain a h := h
+    box_obtain ⟨a, h⟩ := h
     box_clear this
     on_goal 2 => exact a
     symm
@@ -648,7 +648,7 @@ example (n m k : Nat) (h: n = m) (h' : m = k) : n = k ∧ n = k := by
 example (x y : Int) : True ∧ ∀ a b c : Nat, a = b → a = c → b = c := by
   box_proof
     backup
-    admit_goal h 0
+    assume_goal h 0
     skip
     constructor
     skip
@@ -666,7 +666,7 @@ example (p : Prop) (h : ¬ p → p) : p := by
   box_proof
     backup
     apply h
-    admit_goal h'
+    assume_goal h'
     rw [Classical.not_not] at h'
     exact h'
 
@@ -683,10 +683,10 @@ example (a b c : Prop) (h1 : a → c) (h2 : b → c) (h3 : ¬a → ¬b → c) : 
   box_proof
     backup
     apply h1
-    admit_goal ha
+    assume_goal ha
     backup
     apply h2
-    admit_goal hb
+    assume_goal hb
     apply h3
     exact hb
     exact ha

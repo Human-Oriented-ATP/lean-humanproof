@@ -115,7 +115,7 @@ box_proofi
   have ex_N := exists_all_mod_large n0 _ 1 a_pos
   box_obtain n hs := ex_N
   exact hs.2
-  admit_goal ncoprime
+  assume_goal ncoprime
   exact hs.1
 
   apply Or.intro_left

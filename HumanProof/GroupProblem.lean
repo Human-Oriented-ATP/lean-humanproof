@@ -92,7 +92,7 @@ theorem group_problem (G : Type) [Group G]
     simp at hab
     revert eq
     simp
-    admit_goal ainv
+    assume_goal ainv
     intro eq
     simp [eq] at hab
     exact distinct_finish
@@ -108,7 +108,7 @@ theorem group_problem (G : Type) [Group G]
     simp! [mul_assoc] at hab
     intro eq
     simp! [eq] at hab
-    admit_goal hbb
+    assume_goal hbb
     intro eq
     simp [eq] at hab
     exact distinct_finish

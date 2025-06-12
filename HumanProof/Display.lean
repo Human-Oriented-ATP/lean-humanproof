@@ -35,7 +35,7 @@ match box with
     if hidden then aux body
     else
       let line : TreeLine := {
-        isFocused := false, isGoal := false, name := decl.userName, type := decl.type, ctx := ← read }
+        isFocused := false, isGoal := false, name := decl.userName.eraseMacroScopes, type := decl.type, ctx := ← read }
       let tree ← aux body
       if tree.isEmpty then return tree
       else return ⟨(line::tree.lines), tree.subtrees⟩
@@ -55,7 +55,7 @@ match box with
     if hidden then aux body
     else
       let line : TreeLine := {
-        isFocused := false, isGoal := false, name := decl.userName, type := decl.type,
+        isFocused := false, isGoal := false, name := decl.userName.eraseMacroScopes, type := decl.type,
         value? := value, ctx := ← read }
       let tree ← aux body
       if tree.isEmpty then return tree
